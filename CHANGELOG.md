@@ -7,6 +7,24 @@ Semantic Versioning.
 
 ## [Unreleased]
 
+### Added
+
+- Generation pipeline (Issue #15): queued jobs run against
+  the engine one at a time — the runner starts or switches
+  the engine to each job's variant and quantization, posts
+  the generation with the job's LoRA stack, and writes the
+  outputs to the outputs folder with the full settings
+  embedded in each PNG and recorded in the gallery. Failed
+  jobs stay in the queue with the full reason; running jobs
+  can be cancelled; finished images preview on the Generate
+  page. Image-to-image gained a denoise strength control.
+
+### Fixed
+
+- File and download sizes now display in the unit that fits
+  the size (KB, MB, or GB) instead of always in GB, so a
+  246 MB file no longer reads as a fraction of a GB.
+
 ## [0.1.5] - 2026-11-21
 
 ### Added

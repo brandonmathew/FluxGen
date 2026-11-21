@@ -413,6 +413,29 @@ code {
   color: var(--danger);
 }
 
+.queue-list li.queue-item {
+  flex-direction: column;
+  align-items: stretch;
+}
+
+.queue-list .q-main {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.queue-list .q-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.queue-list .q-reason {
+  color: var(--danger);
+  font-size: 12.5px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 .queue-empty {
   color: var(--muted);
 }

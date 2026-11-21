@@ -17,7 +17,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use serde::Serialize;
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 use fluxgen_core::{AppError, DataPaths, Quant, Variant};
 use fluxgen_engine::{EngineConfig, EngineProcess};
@@ -44,14 +44,26 @@ pub struct AppState {
     /// Portable data paths, resolved at startup.
     pub paths: DataPaths,
     /// SQLite store, opened at startup.
-    pub store: Mutex<Store>,
+    pub store: Arc<Mutex<Store>>,
     /// Running engine process, when started.
-    pub engine: tokio::sync::Mutex<Option<EngineProcess>>,
+    pub engine: Arc<tokio::sync::Mutex<Option<EngineProcess>>>,
     /// In-flight variant downloads.
     pub downloads: Arc<DownloadRegistry>,
     /// An application update that has been found and is ready
     /// to install.
     pub pending_update: tokio::sync::Mutex<Option<tauri_plugin_updater::Update>>,
+    /// Generation queue, in enqueue order. Jobs are session
+    /// state; finished outputs persist in the gallery.
+    pub jobs: Arc<tokio::sync::Mutex<Vec<fluxgen_core::Job>>>,
+    /// Next generation job id.
+    pub next_job_id: Arc<std::sync::atomic::AtomicU64>,
+    /// Wakes the generation runner when a job is enqueued.
+    pub queue_notify: Arc<tokio::sync::Notify>,
+    /// Variant and quantization the engine is loaded with,
+    /// when the app started it.
+    pub loaded_engine: Arc<tokio::sync::Mutex<Option<(Variant, Quant)>>>,
+    /// Handle of the currently executing job, for cancel.
+    pub running_job: Arc<tokio::sync::Mutex<Option<tokio::task::JoinHandle<()>>>>,
 }
 
 fn err_string(e: AppError) -> String {
@@ -738,6 +750,25 @@ fn engine_config_for(
             variant.display_name()
         ))
     })?;
+    // The server resolves per-request LoRAs from the variant's
+    // LoRA directory. A variant's bundled LoRA downloads with
+    // the model files, so link it into the LoRA directory where
+    // the server can address it by file name.
+    let loras_dir = paths.variant_loras_dir(variant);
+    std::fs::create_dir_all(&loras_dir)?;
+    if let Some(file) = profile
+        .shared_files
+        .iter()
+        .find(|f| f.role == fluxgen_models::profiles::FileRole::BundledLora)
+    {
+        let src = dir.join(file.file_name);
+        let dst = loras_dir.join(file.file_name);
+        if src.is_file() && !dst.exists() {
+            if std::fs::hard_link(&src, &dst).is_err() {
+                let _ = std::fs::copy(&src, &dst);
+            }
+        }
+    }
     let binary_path = engine_binary_path(paths);
     Ok(EngineConfig {
         binary_path,
@@ -745,6 +776,7 @@ fn engine_config_for(
         model_path,
         text_encoder_paths: encoders,
         vae_path,
+        lora_model_dir: Some(loras_dir),
         startup_timeout_secs: 300,
     })
 }
@@ -792,6 +824,7 @@ async fn engine_start(
     let mut process = EngineProcess::launch(config).map_err(err_string)?;
     process.wait_until_ready().await.map_err(err_string)?;
     *guard = Some(process);
+    *state.loaded_engine.lock().await = Some((variant, quant));
     Ok(EngineStatusDto {
         running: true,
         alive: true,
@@ -806,6 +839,7 @@ async fn engine_stop(state: State<'_, AppState>) -> Result<EngineStatusDto, Stri
     if let Some(mut process) = guard.take() {
         process.shutdown().await.map_err(err_string)?;
     }
+    *state.loaded_engine.lock().await = None;
     Ok(EngineStatusDto {
         running: false,
         alive: false,
@@ -832,6 +866,473 @@ async fn engine_status(state: State<'_, AppState>) -> Result<EngineStatusDto, St
             alive: false,
             port: ENGINE_PORT,
         }),
+    }
+}
+
+/// Generation request as submitted from the Generate page.
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EnqueueDto {
+    /// Variant id.
+    pub variant_id: String,
+    /// Positive prompt.
+    pub prompt: String,
+    /// Negative prompt.
+    pub negative_prompt: String,
+    /// Seed; `None` chooses a random seed at run time.
+    pub seed: Option<u64>,
+    /// Sampling steps.
+    pub steps: u32,
+    /// Guidance scale.
+    pub guidance: f32,
+    /// Sampler name in the engine's spelling.
+    pub sampler: String,
+    /// Output width in pixels.
+    pub width: u32,
+    /// Output height in pixels.
+    pub height: u32,
+    /// Source image path for image-to-image; empty or absent
+    /// runs text-to-image.
+    pub init_image: Option<String>,
+    /// Denoise strength for image-to-image.
+    pub denoise_strength: Option<f32>,
+}
+
+/// The settings document embedded into every output PNG and
+/// stored in the gallery database: the generation settings
+/// flattened alongside the variant, quantization, LoRA stack,
+/// and source image that produced the image.
+#[derive(Serialize)]
+pub struct GenerationRecord {
+    /// Variant id.
+    pub variant: String,
+    /// Quantization label.
+    pub quant: String,
+    /// The generation settings, flattened to the top level.
+    #[serde(flatten)]
+    pub settings: fluxgen_core::GenerationSettings,
+    /// LoRA stack applied, in order.
+    pub loras: Vec<fluxgen_core::LoraEntry>,
+    /// Source image path for image-to-image outputs.
+    pub init_image: Option<String>,
+}
+
+/// Shared handles the generation runner works through.
+#[derive(Clone)]
+struct JobContext {
+    paths: DataPaths,
+    store: Arc<Mutex<Store>>,
+    engine: Arc<tokio::sync::Mutex<Option<EngineProcess>>>,
+    jobs: Arc<tokio::sync::Mutex<Vec<fluxgen_core::Job>>>,
+    queue_notify: Arc<tokio::sync::Notify>,
+    loaded_engine: Arc<tokio::sync::Mutex<Option<(Variant, Quant)>>>,
+    running_job: Arc<tokio::sync::Mutex<Option<tokio::task::AbortHandle>>>,
+}
+
+impl JobContext {
+    fn from_state(state: &AppState) -> JobContext {
+        JobContext {
+            paths: state.paths.clone(),
+            store: state.store.clone(),
+            engine: state.engine.clone(),
+            jobs: state.jobs.clone(),
+            queue_notify: state.queue_notify.clone(),
+            loaded_engine: state.loaded_engine.clone(),
+            running_job: state.running_job.clone(),
+        }
+    }
+}
+
+/// The quantization a job runs at: the recommended pick when
+/// that quantization is downloaded, otherwise the largest
+/// downloaded one.
+fn quant_for_job(
+    state: &AppState,
+    variant: Variant,
+    width: u32,
+    height: u32,
+) -> Result<Quant, String> {
+    let profile = profile_for(variant);
+    let installed = profile.installed_quants(&state.paths.variant_models_dir(variant));
+    if installed.is_empty() {
+        return Err(format!(
+            "{} is not downloaded; download it on the Models page first",
+            variant.display_name()
+        ));
+    }
+    if let Ok(specs) = detect_system(&state.paths.root) {
+        if let Ok(choice) = pick_quant(variant, &specs, width, height) {
+            if installed.contains(&choice.quant) {
+                return Ok(choice.quant);
+            }
+        }
+    }
+    Ok(*installed
+        .iter()
+        .max()
+        .expect("installed quants checked non-empty"))
+}
+
+/// The variant's bundled LoRA as a job entry, when the
+/// variant ships one and it is downloaded. Its path points
+/// into the variant's LoRA directory, where the engine
+/// start links it for the server.
+fn bundled_lora_entry(paths: &DataPaths, variant: Variant) -> Option<fluxgen_core::LoraEntry> {
+    let profile = profile_for(variant);
+    let file = profile
+        .shared_files
+        .iter()
+        .find(|f| f.role == fluxgen_models::profiles::FileRole::BundledLora)?;
+    let downloaded = paths.variant_models_dir(variant).join(file.file_name);
+    if !downloaded.is_file() {
+        return None;
+    }
+    Some(fluxgen_core::LoraEntry {
+        name: format!("{} (bundled)", file.file_name),
+        path: paths.variant_loras_dir(variant).join(file.file_name),
+        variant,
+        weight: 1.0,
+        enabled: true,
+    })
+}
+
+/// Queue a generation from the Generate page. The job carries
+/// the variant's enabled LoRA stack plus its bundled LoRA
+/// when it has one.
+#[tauri::command]
+async fn enqueue_generation(
+    state: State<'_, AppState>,
+    request: EnqueueDto,
+) -> Result<fluxgen_core::Job, String> {
+    let variant = Variant::from_id(&request.variant_id)
+        .ok_or_else(|| format!("unknown variant id: {}", request.variant_id))?;
+    let sampler = match request.sampler.as_str() {
+        "euler" => fluxgen_core::Sampler::Euler,
+        "euler_a" => fluxgen_core::Sampler::EulerAncestral,
+        "heun" => fluxgen_core::Sampler::Heun,
+        "dpm++2m" => fluxgen_core::Sampler::Dpmpp2m,
+        "lcm" => fluxgen_core::Sampler::Lcm,
+        other => return Err(format!("unknown sampler: {other}")),
+    };
+    let init_image = request
+        .init_image
+        .filter(|s| !s.trim().is_empty())
+        .map(PathBuf::from);
+    let mut settings = fluxgen_core::GenerationSettings {
+        prompt: request.prompt,
+        negative_prompt: request.negative_prompt,
+        seed: request.seed,
+        steps: request.steps,
+        guidance: request.guidance,
+        sampler,
+        width: request.width,
+        height: request.height,
+        denoise_strength: request.denoise_strength,
+    };
+    if init_image.is_some() && settings.denoise_strength.is_none() {
+        settings.denoise_strength = Some(0.75);
+    }
+    settings.validate().map_err(err_string)?;
+    let quant = quant_for_job(&state, variant, request.width, request.height)?;
+    let mut loras = {
+        let store = state
+            .store
+            .lock()
+            .map_err(|_| "store lock poisoned".to_string())?;
+        store.list_loras(variant).map_err(err_string)?
+    };
+    if let Some(bundled) = bundled_lora_entry(&state.paths, variant) {
+        loras.insert(0, bundled);
+    }
+    let id = state
+        .next_job_id
+        .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    let job = fluxgen_core::Job::new(id, variant, quant, settings, loras, init_image);
+    state.jobs.lock().await.push(job.clone());
+    state.queue_notify.notify_one();
+    Ok(job)
+}
+
+/// All jobs in the queue, in enqueue order.
+#[tauri::command]
+async fn list_jobs(state: State<'_, AppState>) -> Result<Vec<fluxgen_core::Job>, String> {
+    Ok(state.jobs.lock().await.clone())
+}
+
+/// Cancel a queued or running job. A running job's request
+/// is aborted; the engine may finish the image on its side,
+/// but no output is recorded for a cancelled job.
+#[tauri::command]
+async fn cancel_job(app: AppHandle, state: State<'_, AppState>, job_id: u64) -> Result<(), String> {
+    let updated = {
+        let mut jobs = state.jobs.lock().await;
+        let job = jobs
+            .iter_mut()
+            .find(|j| j.id == job_id)
+            .ok_or_else(|| format!("unknown job id: {job_id}"))?;
+        match &job.status {
+            fluxgen_core::JobStatus::Queued | fluxgen_core::JobStatus::Running { .. } => {
+                job.status = fluxgen_core::JobStatus::Cancelled;
+                job.clone()
+            }
+            _ => return Err("the job has already finished".to_string()),
+        }
+    };
+    if let Some(handle) = state.running_job.lock().await.as_ref() {
+        handle.abort();
+    }
+    let _ = app.emit("job-updated", updated);
+    Ok(())
+}
+
+/// Remove a finished job from the queue list.
+#[tauri::command]
+async fn dismiss_job(state: State<'_, AppState>, job_id: u64) -> Result<(), String> {
+    let mut jobs = state.jobs.lock().await;
+    let position = jobs
+        .iter()
+        .position(|j| j.id == job_id && j.status.is_terminal())
+        .ok_or_else(|| format!("job {job_id} is not finished or does not exist"))?;
+    jobs.remove(position);
+    Ok(())
+}
+
+/// One output of a completed job as a data URL, for the
+/// preview pane.
+#[tauri::command]
+async fn get_job_output(
+    state: State<'_, AppState>,
+    job_id: u64,
+    index: usize,
+) -> Result<String, String> {
+    let jobs = state.jobs.lock().await;
+    let job = jobs
+        .iter()
+        .find(|j| j.id == job_id)
+        .ok_or_else(|| format!("unknown job id: {job_id}"))?;
+    let outputs = match &job.status {
+        fluxgen_core::JobStatus::Completed { outputs } => outputs,
+        _ => return Err("the job has no outputs".to_string()),
+    };
+    let path = outputs
+        .get(index)
+        .ok_or_else(|| format!("job {job_id} has no output {index}"))?;
+    let bytes =
+        std::fs::read(path).map_err(|e| format!("could not read {}: {e}", path.display()))?;
+    use base64::Engine as _;
+    Ok(format!(
+        "data:image/png;base64,{}",
+        base64::engine::general_purpose::STANDARD.encode(bytes)
+    ))
+}
+
+/// A random seed from the system clock and process id.
+fn random_seed() -> u64 {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos() as u64)
+        .unwrap_or(0x9e37_79b9_7f4a_7c15);
+    nanos ^ (std::process::id() as u64).rotate_left(32)
+}
+
+/// Make sure the engine is running with the job's variant at
+/// the job's quantization, restarting it when it holds a
+/// different one. Returns the engine base URL.
+async fn ensure_engine_for_job(
+    ctx: &JobContext,
+    job: &fluxgen_core::Job,
+) -> Result<String, String> {
+    let mut guard = ctx.engine.lock().await;
+    if let Some(process) = guard.as_mut() {
+        let alive = process.try_exit_status().map_err(err_string)?.is_none();
+        if alive && *ctx.loaded_engine.lock().await == Some((job.variant, job.quant)) {
+            return Ok(process.config().base_url());
+        }
+        if alive {
+            process.shutdown().await.map_err(err_string)?;
+        }
+        *guard = None;
+        *ctx.loaded_engine.lock().await = None;
+    }
+    let config = engine_config_for(&ctx.paths, job.variant, job.quant).map_err(err_string)?;
+    let mut process = EngineProcess::launch(config).map_err(err_string)?;
+    process.wait_until_ready().await.map_err(err_string)?;
+    let base_url = process.config().base_url();
+    *guard = Some(process);
+    *ctx.loaded_engine.lock().await = Some((job.variant, job.quant));
+    Ok(base_url)
+}
+
+/// Execute one job end to end and return its terminal
+/// status.
+async fn execute_job(ctx: &JobContext, job: &fluxgen_core::Job) -> fluxgen_core::JobStatus {
+    match execute_job_inner(ctx, job).await {
+        Ok(outputs) => fluxgen_core::JobStatus::Completed { outputs },
+        Err(reason) => fluxgen_core::JobStatus::Failed { reason },
+    }
+}
+
+async fn execute_job_inner(
+    ctx: &JobContext,
+    job: &fluxgen_core::Job,
+) -> Result<Vec<PathBuf>, String> {
+    let base_url = ensure_engine_for_job(ctx, job).await?;
+    // Resolve the concrete seed now so the request and the
+    // record agree.
+    let seed = job.settings.seed.unwrap_or_else(random_seed);
+    {
+        let mut jobs = ctx.jobs.lock().await;
+        if let Some(stored) = jobs.iter_mut().find(|j| j.id == job.id) {
+            stored.settings.seed = Some(seed);
+        }
+    }
+    let loras = job
+        .loras
+        .iter()
+        .filter(|lora| lora.enabled)
+        .map(|lora| {
+            let name = lora
+                .path
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_else(|| lora.name.clone());
+            fluxgen_engine::LoraRequest {
+                path: name,
+                multiplier: lora.weight,
+            }
+        })
+        .collect();
+    let init_image = match &job.init_image {
+        Some(path) => Some(
+            std::fs::read(path)
+                .map_err(|e| format!("could not read source image {}: {e}", path.display()))?,
+        ),
+        None => None,
+    };
+    let request = fluxgen_engine::GenerationRequest {
+        prompt: job.settings.prompt.clone(),
+        negative_prompt: job.settings.negative_prompt.clone(),
+        seed,
+        steps: job.settings.steps,
+        cfg_scale: job.settings.guidance,
+        width: job.settings.width,
+        height: job.settings.height,
+        sampler_name: job.settings.sampler.engine_name().to_string(),
+        init_image,
+        denoising_strength: job.settings.denoise_strength,
+        loras,
+    };
+    let images = fluxgen_engine::generate(&base_url, &request)
+        .await
+        .map_err(|e| {
+            let message = e.to_string();
+            if message.contains("generation request failed") {
+                // A transport failure usually means the engine
+                // died; forget what it was loaded with.
+                let loaded = ctx.loaded_engine.clone();
+                tokio::spawn(async move {
+                    *loaded.lock().await = None;
+                });
+            }
+            message
+        })?;
+
+    let mut recorded = job.settings.clone();
+    recorded.seed = Some(seed);
+    let record = GenerationRecord {
+        variant: job.variant.id().to_string(),
+        quant: job.quant.label().to_string(),
+        settings: recorded,
+        loras: job.loras.clone(),
+        init_image: job
+            .init_image
+            .as_ref()
+            .map(|p| p.to_string_lossy().into_owned()),
+    };
+    let record_json = serde_json::to_string(&record).map_err(|e| e.to_string())?;
+    let created_at = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    let mut outputs = Vec::new();
+    for (index, bytes) in images.iter().enumerate() {
+        let path = ctx
+            .paths
+            .outputs
+            .join(format!("job-{}-{}-{}.png", job.id, index + 1, seed));
+        std::fs::write(&path, bytes)
+            .map_err(|e| format!("could not write {}: {e}", path.display()))?;
+        fluxgen_store::write_settings_chunk(&path, &record_json).map_err(err_string)?;
+        {
+            let store = ctx
+                .store
+                .lock()
+                .map_err(|_| "store lock poisoned".to_string())?;
+            store
+                .add_gallery_record(&fluxgen_store::GalleryRecord {
+                    id: None,
+                    path: path.clone(),
+                    created_at,
+                    variant: job.variant,
+                    quant: job.quant,
+                    settings_json: record_json.clone(),
+                })
+                .map_err(err_string)?;
+        }
+        outputs.push(path);
+    }
+    Ok(outputs)
+}
+
+/// Run one queued job: mark it running, execute it, record
+/// the outcome, and notify the front-end at each step.
+async fn run_one_job(ctx: JobContext, app: AppHandle, job_id: u64) {
+    let job = {
+        let mut jobs = ctx.jobs.lock().await;
+        let Some(job) = jobs.iter_mut().find(|j| j.id == job_id) else {
+            return;
+        };
+        if job.status != fluxgen_core::JobStatus::Queued {
+            return;
+        }
+        job.status = fluxgen_core::JobStatus::Running { progress: None };
+        job.clone()
+    };
+    let _ = app.emit("job-updated", job.clone());
+    let outcome = execute_job(&ctx, &job).await;
+    let updated = {
+        let mut jobs = ctx.jobs.lock().await;
+        let Some(stored) = jobs.iter_mut().find(|j| j.id == job_id) else {
+            return;
+        };
+        // A cancellation that landed during execution wins.
+        if stored.status == fluxgen_core::JobStatus::Cancelled {
+            return;
+        }
+        stored.status = outcome;
+        stored.clone()
+    };
+    let _ = app.emit("job-updated", updated);
+}
+
+/// The generation runner: processes queued jobs one at a
+/// time, in order, for as long as the application runs.
+async fn generation_loop(app: AppHandle, ctx: JobContext) {
+    loop {
+        let next_id = {
+            let jobs = ctx.jobs.lock().await;
+            jobs.iter()
+                .find(|j| j.status == fluxgen_core::JobStatus::Queued)
+                .map(|j| j.id)
+        };
+        let Some(job_id) = next_id else {
+            ctx.queue_notify.notified().await;
+            continue;
+        };
+        let handle = tokio::spawn(run_one_job(ctx.clone(), app.clone(), job_id));
+        *ctx.running_job.lock().await = Some(handle.abort_handle());
+        let _ = handle.await;
+        *ctx.running_job.lock().await = None;
     }
 }
 
@@ -999,16 +1500,27 @@ pub fn run() {
 
     let state = AppState {
         paths,
-        store: Mutex::new(store),
-        engine: tokio::sync::Mutex::new(None),
+        store: Arc::new(Mutex::new(store)),
+        engine: Arc::new(tokio::sync::Mutex::new(None)),
         downloads: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
         pending_update: tokio::sync::Mutex::new(None),
+        jobs: Arc::new(tokio::sync::Mutex::new(Vec::new())),
+        next_job_id: Arc::new(std::sync::atomic::AtomicU64::new(1)),
+        queue_notify: Arc::new(tokio::sync::Notify::new()),
+        loaded_engine: Arc::new(tokio::sync::Mutex::new(None)),
+        running_job: Arc::new(tokio::sync::Mutex::new(None)),
     };
 
     tauri::Builder::default()
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_dialog::init())
         .manage(state)
+        .setup(|app| {
+            let ctx = JobContext::from_state(&app.state::<AppState>());
+            let handle = app.handle().clone();
+            tauri::async_runtime::spawn(generation_loop(handle, ctx));
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             get_system_info,
             get_engine_info,
@@ -1023,6 +1535,11 @@ pub fn run() {
             engine_start,
             engine_stop,
             engine_status,
+            enqueue_generation,
+            list_jobs,
+            cancel_job,
+            dismiss_job,
+            get_job_output,
             list_gallery,
             list_presets,
             list_loras,

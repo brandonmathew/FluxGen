@@ -9,7 +9,6 @@ const invoke = window.__TAURI__.core.invoke;
 const state = {
   variants: [],
   queue: [],
-  nextJobId: 1,
   crashReport: null,
   errors: [],
 };
@@ -128,9 +127,20 @@ nav.addEventListener("click", (event) => {
 // Helpers
 // ---------------------------------------------------------------------------
 
-function formatGB(bytes) {
+/// Format a byte count in the largest unit that keeps the
+/// value at or above 1, so small files read as MB or KB
+/// instead of a fraction of a GB.
+function formatBytes(bytes) {
   if (bytes === null || bytes === undefined) return "—";
-  return (bytes / 1_000_000_000).toFixed(1) + " GB";
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  let value = bytes;
+  let unit = 0;
+  while (value >= 1000 && unit < units.length - 1) {
+    value /= 1000;
+    unit++;
+  }
+  const decimals = value >= 100 ? 0 : value >= 10 ? 1 : 2;
+  return value.toFixed(decimals) + " " + units[unit];
 }
 
 function el(tag, className, text) {
@@ -192,9 +202,9 @@ async function loadSystemInfo() {
   if (!info) return;
   document.getElementById("sys-gpu").textContent = info.gpu_name || "Not detected";
   document.getElementById("sys-vram").textContent =
-    info.vram_bytes === null ? "Not detected" : formatGB(info.vram_bytes);
-  document.getElementById("sys-ram").textContent = formatGB(info.ram_bytes);
-  document.getElementById("sys-disk").textContent = formatGB(info.free_disk_bytes) + " free";
+    info.vram_bytes === null ? "Not detected" : formatBytes(info.vram_bytes);
+  document.getElementById("sys-ram").textContent = formatBytes(info.ram_bytes);
+  document.getElementById("sys-disk").textContent = formatBytes(info.free_disk_bytes) + " free";
   document.getElementById("sys-data").textContent = info.data_root;
 }
 
@@ -289,8 +299,8 @@ async function variantCard(variant) {
   for (const quant of variant.quants) {
     const row = el("tr");
     row.appendChild(el("td", null, quant.label));
-    row.appendChild(el("td", null, formatGB(quant.size_bytes)));
-    row.appendChild(el("td", null, formatGB(quant.total_size_bytes)));
+    row.appendChild(el("td", null, formatBytes(quant.size_bytes)));
+    row.appendChild(el("td", null, formatBytes(quant.total_size_bytes)));
     tbody.appendChild(row);
   }
   table.appendChild(tbody);
@@ -310,7 +320,7 @@ async function variantCard(variant) {
       "Recommended: " +
         choice.label +
         " (" +
-        formatGB(choice.model_size_bytes) +
+        formatBytes(choice.model_size_bytes) +
         ")\n" +
         choice.reasons.join("\n")
     );
@@ -324,7 +334,7 @@ async function variantCard(variant) {
     const option = document.createElement("option");
     option.value = quant.label;
     option.textContent =
-      quant.label + " — " + formatGB(quant.total_size_bytes) + " total";
+      quant.label + " — " + formatBytes(quant.total_size_bytes) + " total";
     quantSelect.appendChild(option);
   }
   if (choice) {
@@ -421,9 +431,9 @@ window.__TAURI__.event.listen("download-progress", (event) => {
     " — " +
     p.file_name +
     " — " +
-    formatGB(p.overall_downloaded_bytes) +
+    formatBytes(p.overall_downloaded_bytes) +
     " of " +
-    formatGB(p.overall_total_bytes) +
+    formatBytes(p.overall_total_bytes) +
     " (" +
     percent +
     "%)";
@@ -529,6 +539,23 @@ document.getElementById("engine-stop").addEventListener("click", async () => {
 // Queue (front-end job list for this stage)
 // ---------------------------------------------------------------------------
 
+function jobStatusText(job) {
+  switch (job.status.state) {
+    case "queued":
+      return "Queued";
+    case "running":
+      return "Running…";
+    case "completed":
+      return "Done";
+    case "failed":
+      return "Failed";
+    case "cancelled":
+      return "Cancelled";
+    default:
+      return job.status.state;
+  }
+}
+
 function renderQueue() {
   const list = document.getElementById("queue-list");
   list.textContent = "";
@@ -537,49 +564,124 @@ function renderQueue() {
     return;
   }
   for (const job of state.queue) {
-    const item = el("li");
+    const item = el("li", "queue-item");
+    const variant = state.variants.find((v) => v.id === job.variant);
+    const variantName = variant ? variant.display_name : job.variant;
+    const prompt = job.settings.prompt;
+    const preview = prompt.length > 48 ? prompt.slice(0, 48) + "…" : prompt;
     const label =
-      "#" + job.id + " · " + job.variantName + " · " + job.width + "×" + job.height +
-      " · " + job.steps + " steps · “" + job.promptPreview + "”";
-    item.appendChild(el("span", null, label));
-    const status = el("span", "q-status", job.status);
-    item.appendChild(status);
-    const cancel = document.createElement("button");
-    cancel.type = "button";
-    cancel.textContent = "Cancel";
-    cancel.addEventListener("click", () => {
-      job.status = "Cancelled";
-      renderQueue();
-    });
-    item.appendChild(cancel);
+      "#" + job.id + " · " + variantName + " · " + job.settings.width + "×" +
+      job.settings.height + " · " + job.settings.steps + " steps · “" + preview + "”";
+    const main = el("div", "q-main");
+    main.appendChild(el("span", null, label));
+    main.appendChild(el("span", "q-status", jobStatusText(job)));
+    item.appendChild(main);
+    if (job.status.state === "failed") {
+      item.appendChild(el("div", "q-reason", job.status.reason));
+    }
+    const actions = el("div", "q-actions");
+    if (job.status.state === "queued" || job.status.state === "running") {
+      const cancel = document.createElement("button");
+      cancel.type = "button";
+      cancel.textContent = "Cancel";
+      cancel.addEventListener("click", async () => {
+        await call("cancel_job", { jobId: job.id });
+      });
+      actions.appendChild(cancel);
+    }
+    if (job.status.state === "completed") {
+      const view = document.createElement("button");
+      view.type = "button";
+      view.textContent = "View";
+      view.addEventListener("click", () => showJobOutput(job, 0));
+      actions.appendChild(view);
+    }
+    if (
+      job.status.state === "completed" ||
+      job.status.state === "failed" ||
+      job.status.state === "cancelled"
+    ) {
+      const dismiss = document.createElement("button");
+      dismiss.type = "button";
+      dismiss.textContent = "Dismiss";
+      dismiss.addEventListener("click", async () => {
+        const result = await call("dismiss_job", { jobId: job.id });
+        if (result !== undefined) {
+          state.queue = state.queue.filter((j) => j.id !== job.id);
+          renderQueue();
+        }
+      });
+      actions.appendChild(dismiss);
+    }
+    item.appendChild(actions);
     list.appendChild(item);
   }
 }
 
-document.getElementById("gen-enqueue").addEventListener("click", () => {
+async function showJobOutput(job, index) {
+  const url = await call("get_job_output", { jobId: job.id, index });
+  if (!url) return;
+  const stage = document.getElementById("preview-stage");
+  stage.textContent = "";
+  const img = document.createElement("img");
+  img.src = url;
+  img.alt = job.settings.prompt;
+  stage.appendChild(img);
+  const meta = document.getElementById("preview-meta");
+  meta.textContent =
+    job.settings.prompt +
+    " · seed " + (job.settings.seed ?? "random") +
+    " · " + job.settings.width + "×" + job.settings.height +
+    " · " + job.settings.steps + " steps";
+}
+
+document.getElementById("gen-enqueue").addEventListener("click", async () => {
   clearError();
   const prompt = document.getElementById("gen-prompt").value.trim();
   if (!prompt) {
-    showError("Invalid value for prompt: prompt must not be empty");
+    showError("enqueue_generation: Invalid value for prompt: prompt must not be empty");
     return;
   }
   const variantId = document.getElementById("gen-variant").value;
-  const variant = state.variants.find((v) => v.id === variantId);
-  if (!variant) {
-    showError("No variant selected. Download a variant on the Models page first.");
+  if (!variantId) {
+    showError("enqueue_generation: No variant selected. Download a variant on the Models page first.");
     return;
   }
-  state.queue.push({
-    id: state.nextJobId++,
-    variantId,
-    variantName: variant.display_name,
-    promptPreview: prompt.length > 48 ? prompt.slice(0, 48) + "…" : prompt,
-    width: Number(document.getElementById("gen-width").value) || 1024,
-    height: Number(document.getElementById("gen-height").value) || 1024,
-    steps: Number(document.getElementById("gen-steps").value) || 20,
-    status: "Queued",
+  const seedText = document.getElementById("gen-seed").value.trim();
+  const initImage = document.getElementById("gen-init-image").value.trim();
+  const job = await call("enqueue_generation", {
+    request: {
+      variantId,
+      prompt,
+      negativePrompt: document.getElementById("gen-negative").value,
+      seed: seedText === "" ? null : Number(seedText),
+      steps: Number(document.getElementById("gen-steps").value) || 20,
+      guidance: Number(document.getElementById("gen-guidance").value) || 3.5,
+      sampler: document.getElementById("gen-sampler").value,
+      width: Number(document.getElementById("gen-width").value) || 1024,
+      height: Number(document.getElementById("gen-height").value) || 1024,
+      initImage: initImage === "" ? null : initImage,
+      denoiseStrength:
+        initImage === ""
+          ? null
+          : Number(document.getElementById("gen-strength").value) || 0.75,
+    },
   });
+  if (!job) return;
+  state.queue.push(job);
   renderQueue();
+});
+
+listen("job-updated", async (event) => {
+  const updated = event.payload;
+  const at = state.queue.findIndex((j) => j.id === updated.id);
+  if (at >= 0) state.queue[at] = updated;
+  else state.queue.push(updated);
+  renderQueue();
+  if (updated.status.state === "completed") {
+    showJobOutput(updated, 0);
+    loadGallery();
+  }
 });
 
 // ---------------------------------------------------------------------------
@@ -740,7 +842,7 @@ updateInstallButton.addEventListener("click", async () => {
 window.__TAURI__.event.listen("update-progress", (event) => {
   updateProgress.textContent =
     "Downloading the update — " +
-    formatGB(event.payload.downloaded_bytes) +
+    formatBytes(event.payload.downloaded_bytes) +
     " downloaded.";
 });
 
@@ -752,6 +854,11 @@ window.__TAURI__.event.listen("update-progress", (event) => {
   await checkCrashReport();
   await loadSystemInfo();
   await loadVariants();
+  const jobs = await call("list_jobs");
+  if (jobs) {
+    state.queue = jobs;
+    renderQueue();
+  }
   await refreshEngineStatus();
   renderQueue();
   checkUpdates(true);
