@@ -40,15 +40,18 @@ jobs:
           Copy-Item apps/fluxgen-app/target/release/fluxgen-app.exe "$portable\FluxGen.exe"
           Compress-Archive -Path $portable -DestinationPath "dist\FluxGen-portable.zip"
           Remove-Item $portable -Recurse -Force
-          # Installer for manual installs, plus the signed updater
-          # package the in-app updater downloads.
+          # Installer for manual installs. The same signed
+          # installer is what the in-app updater downloads: the
+          # bundler signs it in place and leaves the signature
+          # next to it.
           $nsis = "apps/fluxgen-app/target/release/bundle/nsis"
           Copy-Item "$nsis/*.exe" dist/
-          Copy-Item "$nsis/*.nsis.zip" dist/
           $version = (Get-Content apps/fluxgen-app/tauri.conf.json -Raw | ConvertFrom-Json).version
-          $updaterZip = Get-ChildItem dist -Filter "*.nsis.zip" | Select-Object -First 1
-          if (-not $updaterZip) { throw "updater package was not produced" }
-          $signature = Get-Content "$nsis/$($updaterZip.Name).sig" -Raw
+          $installer = Get-ChildItem dist -Filter "*setup.exe" | Select-Object -First 1
+          if (-not $installer) { throw "installer was not produced" }
+          $sigPath = "$nsis/$($installer.Name).sig"
+          if (-not (Test-Path $sigPath)) { throw "updater signature was not produced" }
+          $signature = Get-Content $sigPath -Raw
           $manifest = [ordered]@{
             version = $version
             notes = "See the release page for changes."
@@ -56,7 +59,7 @@ jobs:
             platforms = [ordered]@{
               "windows-x86_64" = [ordered]@{
                 signature = $signature.Trim()
-                url = "https://github.com/brandonmathew/FluxGen/releases/download/v$version/$($updaterZip.Name)"
+                url = "https://github.com/brandonmathew/FluxGen/releases/download/v$version/$($installer.Name)"
               }
             }
           }
