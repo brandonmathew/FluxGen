@@ -7,6 +7,8 @@ Semantic Versioning.
 
 ## [Unreleased]
 
+## [0.1.5] - 2026-11-21
+
 ### Added
 
 - Segmented downloads: files of 32 MiB and larger download
