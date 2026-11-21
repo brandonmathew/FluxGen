@@ -250,6 +250,36 @@ code {
   flex: none;
 }
 
+.update-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: var(--panel-raised);
+  border: 1px solid var(--accent);
+  color: var(--text);
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin-bottom: 14px;
+}
+
+.update-banner span {
+  flex: 1;
+}
+
+.update-banner button {
+  flex: none;
+}
+
+.picker-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.picker-row input {
+  flex: 1;
+}
+
 .error-history {
   margin: 0;
   padding-left: 18px;

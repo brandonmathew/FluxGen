@@ -46,6 +46,11 @@
       <button type="button" id="error-copy">Copy error</button>
       <button type="button" id="error-dismiss" aria-label="Dismiss">×</button>
     </div>
+    <div id="update-banner" class="update-banner" hidden>
+      <span id="update-banner-text"></span>
+      <button type="button" id="update-banner-view">View update</button>
+      <button type="button" id="update-banner-dismiss" aria-label="Dismiss">×</button>
+    </div>
 
     <!-- Generate -->
     <section class="page active" id="page-generate">
@@ -101,7 +106,11 @@
           </div>
           <label class="field">
             <span>Source image (image-to-image, optional)</span>
-            <input type="text" id="gen-init-image" placeholder="Path to source image">
+            <span class="picker-row">
+              <input type="text" id="gen-init-image" placeholder="No image selected" readonly>
+              <button type="button" id="gen-init-pick">Choose image…</button>
+              <button type="button" id="gen-init-clear">Clear</button>
+            </span>
           </label>
           <div class="button-row">
             <button type="button" id="gen-enqueue" class="primary">Add to queue</button>
@@ -141,6 +150,13 @@
       <h1>Models</h1>
       <p class="page-note">Model files are downloaded and verified by FluxGen. The recommended quantization is picked from the detected system specifications; an override can be selected per variant and is verified by an engine load test before use.</p>
       <p class="page-note" id="engine-info"></p>
+      <div class="download-controls" id="engine-download-controls" hidden>
+        <button type="button" id="download-button-engine">Download engine</button>
+      </div>
+      <div class="download-progress" id="download-progress-engine" hidden>
+        <div class="progress-track"><div class="progress-fill" id="download-fill-engine"></div></div>
+        <p class="download-status" id="download-status-engine"></p>
+      </div>
       <div id="variant-list" class="variant-list"></div>
     </section>
 
@@ -191,6 +207,12 @@
       <div class="panel settings-panel">
         <h2>Updates</h2>
         <p class="page-note">FluxGen checks GitHub Releases for updates. An update is installed only after approval. Update artifacts are signed and verified.</p>
+        <p class="page-note" id="update-status">No update check has run yet this session.</p>
+        <div class="button-row">
+          <button type="button" id="update-check">Check for updates</button>
+          <button type="button" id="update-install" hidden>Download and install</button>
+        </div>
+        <p class="page-note" id="update-progress"></p>
       </div>
       <div class="panel settings-panel">
         <h2>Session errors</h2>

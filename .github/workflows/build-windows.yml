@@ -21,81 +21,46 @@ jobs:
       - uses: taiki-e/install-action@v2
         with:
           tool: tauri-cli
-      - name: Stage the bundled engine (stable-diffusion.cpp master-1106-532d2c1)
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = "Stop"
-          $release = "https://github.com/leejet/stable-diffusion.cpp/releases/download/master-1106-532d2c1"
-          $sdZip = "$env:RUNNER_TEMP\sd-win-cuda12.zip"
-          $cuZip = "$env:RUNNER_TEMP\cudart-win-cu12.zip"
-          Invoke-WebRequest "$release/sd-master-532d2c1-bin-win-cuda12-x64.zip" -OutFile $sdZip
-          Invoke-WebRequest "$release/cudart-sd-bin-win-cu12-x64.zip" -OutFile $cuZip
-          $sdHash = (Get-FileHash $sdZip -Algorithm SHA256).Hash.ToLower()
-          if ($sdHash -ne "b087219145a382cc1b1e826318289e1f672b9bb6965977734ef0deb85fe2d03a") {
-            throw "sd engine archive hash mismatch: $sdHash"
-          }
-          $cuHash = (Get-FileHash $cuZip -Algorithm SHA256).Hash.ToLower()
-          if ($cuHash -ne "fe20366827d357c00797eebb58244dddab7fd9a348d70090c3871004c320f38d") {
-            throw "CUDA runtime archive hash mismatch: $cuHash"
-          }
-          Expand-Archive $sdZip -DestinationPath "$env:RUNNER_TEMP\sd-engine" -Force
-          Expand-Archive $cuZip -DestinationPath "$env:RUNNER_TEMP\sd-cudart" -Force
-          $bundle = "apps/fluxgen-app/engine-bundle"
-          New-Item -ItemType Directory -Force $bundle | Out-Null
-          # Files taken from the sd-server CUDA archive: the server,
-          # its libraries, and the image I/O libraries.
-          $fromEngine = @(
-            "sd-server.exe", "stable-diffusion.dll",
-            "ggml.dll", "ggml-base.dll", "ggml-cuda.dll",
-            "ggml-cpu-alderlake.dll", "ggml-cpu-cannonlake.dll",
-            "ggml-cpu-cascadelake.dll", "ggml-cpu-haswell.dll",
-            "ggml-cpu-icelake.dll", "ggml-cpu-sandybridge.dll",
-            "ggml-cpu-skylakex.dll", "ggml-cpu-sse42.dll",
-            "ggml-cpu-x64.dll",
-            "libwebp.dll", "libwebpmux.dll", "libsharpyuv.dll",
-            "webm.dll"
-          )
-          # CUDA runtime libraries ggml-cuda.dll imports; they ship
-          # in the separate CUDA runtime archive.
-          $fromCudart = @("cublas64_12.dll", "cublasLt64_12.dll", "cudart64_12.dll")
-          foreach ($name in $fromEngine) {
-            $found = Get-ChildItem "$env:RUNNER_TEMP\sd-engine" -Recurse -Filter $name | Select-Object -First 1
-            if (-not $found) { throw "engine archive is missing $name" }
-            Copy-Item $found.FullName "$bundle\$name"
-          }
-          foreach ($name in $fromCudart) {
-            $found = Get-ChildItem "$env:RUNNER_TEMP\sd-cudart" -Recurse -Filter $name | Select-Object -First 1
-            if (-not $found) { throw "CUDA runtime archive is missing $name" }
-            Copy-Item $found.FullName "$bundle\$name"
-          }
-          $files = Get-ChildItem $bundle | Where-Object { $_.Extension -in ".exe", ".dll" }
-          if ($files.Count -ne 21) { throw "engine bundle must contain 21 binary files, found $($files.Count)" }
-          $total = ($files | Measure-Object Length -Sum).Sum
-          Write-Host "Engine bundle: $($files.Count) binary files, $total bytes"
-      - name: Build application and NSIS bundle
+      - name: Build application, NSIS bundle, and signed updater artifacts
         working-directory: apps/fluxgen-app
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: cargo tauri build
-      - name: Verify the engine is bundled with the application
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = "Stop"
-          $staged = "apps/fluxgen-app/target/release/engine/sd-server.exe"
-          if (-not (Test-Path $staged)) {
-            throw "engine resources were not copied next to the application binary"
-          }
-          Write-Host "Engine resources present next to the application binary."
-      - name: Collect download files
+      - name: Collect download files and the updater manifest
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
           New-Item -ItemType Directory -Force dist | Out-Null
+          # Portable download: the application on its own. The
+          # engine and all data folders are created next to it on
+          # first run.
           $portable = "dist\FluxGen-portable"
           New-Item -ItemType Directory -Force $portable | Out-Null
           Copy-Item apps/fluxgen-app/target/release/fluxgen-app.exe "$portable\FluxGen.exe"
-          Copy-Item apps/fluxgen-app/engine-bundle "$portable\engine" -Recurse
           Compress-Archive -Path $portable -DestinationPath "dist\FluxGen-portable.zip"
           Remove-Item $portable -Recurse -Force
-          Copy-Item apps/fluxgen-app/target/release/bundle/nsis/*.exe dist/
+          # Installer for manual installs, plus the signed updater
+          # package the in-app updater downloads.
+          $nsis = "apps/fluxgen-app/target/release/bundle/nsis"
+          Copy-Item "$nsis/*.exe" dist/
+          Copy-Item "$nsis/*.nsis.zip" dist/
+          $version = (Get-Content apps/fluxgen-app/tauri.conf.json -Raw | ConvertFrom-Json).version
+          $updaterZip = Get-ChildItem dist -Filter "*.nsis.zip" | Select-Object -First 1
+          if (-not $updaterZip) { throw "updater package was not produced" }
+          $signature = Get-Content "$nsis/$($updaterZip.Name).sig" -Raw
+          $manifest = [ordered]@{
+            version = $version
+            notes = "See the release page for changes."
+            pub_date = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
+            platforms = [ordered]@{
+              "windows-x86_64" = [ordered]@{
+                signature = $signature.Trim()
+                url = "https://github.com/brandonmathew/FluxGen/releases/download/v$version/$($updaterZip.Name)"
+              }
+            }
+          }
+          $manifest | ConvertTo-Json -Depth 5 | Set-Content "dist/latest.json" -Encoding utf8
           Get-ChildItem dist | Format-Table Name, Length
       - name: Upload build artifact
         uses: actions/upload-artifact@v4

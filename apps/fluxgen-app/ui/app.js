@@ -202,13 +202,39 @@ async function loadSystemInfo() {
 // Variants and models
 // ---------------------------------------------------------------------------
 
-async function loadVariants() {
-  const engineInfo = await call("get_engine_info");
-  if (engineInfo) {
-    document.getElementById("engine-info").textContent = engineInfo.bundled
-      ? "Engine: " + engineInfo.version + " (bundled)"
-      : "Engine: " + engineInfo.version + " — binary not found at " + engineInfo.binary_path;
+async function loadEngineInfo() {
+  const info = await call("get_engine_info");
+  if (!info) {
+    return;
   }
+  const line = document.getElementById("engine-info");
+  const controls = document.getElementById("engine-download-controls");
+  const button = document.getElementById("download-button-engine");
+  button.dataset.idleLabel =
+    info.state === "outdated" ? "Update engine" : "Download engine";
+  if (!activeDownloads.has("engine")) {
+    button.textContent = button.dataset.idleLabel;
+  }
+  if (info.state === "current") {
+    line.textContent = "Engine: " + info.version + " — installed.";
+    controls.hidden = true;
+  } else if (info.state === "outdated") {
+    line.textContent =
+      "Engine: an older engine is installed. The pinned version is " +
+      info.version +
+      ".";
+    controls.hidden = false;
+  } else {
+    line.textContent =
+      "Engine: not installed. " +
+      info.version +
+      " downloads when you ask (about 1 GB).";
+    controls.hidden = false;
+  }
+}
+
+async function loadVariants() {
+  await loadEngineInfo();
   const variants = await call("list_variants");
   if (!variants) return;
   state.variants = variants;
@@ -406,6 +432,14 @@ window.__TAURI__.event.listen("download-progress", (event) => {
 window.__TAURI__.event.listen("download-finished", async (event) => {
   const f = event.payload;
   activeDownloads.delete(f.variant_id);
+  if (f.variant_id === "engine") {
+    setDownloadUi("engine", false);
+    await loadEngineInfo();
+    if (!f.ok && f.error) {
+      showError(f.error, "start_engine_download");
+    }
+    return;
+  }
   if (f.ok) {
     await loadVariants();
     for (const id of activeDownloads) {
@@ -418,6 +452,21 @@ window.__TAURI__.event.listen("download-finished", async (event) => {
     }
   }
 });
+
+document
+  .getElementById("download-button-engine")
+  .addEventListener("click", async () => {
+    if (activeDownloads.has("engine")) {
+      await call("cancel_engine_download", {});
+      return;
+    }
+    const started = await call("start_engine_download", {});
+    if (started === undefined) {
+      return;
+    }
+    activeDownloads.add("engine");
+    setDownloadUi("engine", true);
+  });
 
 // ---------------------------------------------------------------------------
 // Engine controls
@@ -601,6 +650,101 @@ async function loadLoras() {
 document.getElementById("lora-variant").addEventListener("change", loadLoras);
 
 // ---------------------------------------------------------------------------
+// Image-to-image source picker
+// ---------------------------------------------------------------------------
+
+document
+  .getElementById("gen-init-pick")
+  .addEventListener("click", async () => {
+    const picked = await window.__TAURI__.dialog.open({
+      multiple: false,
+      directory: false,
+      filters: [
+        { name: "Images", extensions: ["png", "jpg", "jpeg", "webp"] },
+      ],
+    });
+    if (typeof picked === "string") {
+      document.getElementById("gen-init-image").value = picked;
+    }
+  });
+
+document.getElementById("gen-init-clear").addEventListener("click", () => {
+  document.getElementById("gen-init-image").value = "";
+});
+
+// ---------------------------------------------------------------------------
+// Application updates
+// ---------------------------------------------------------------------------
+
+const updateStatus = document.getElementById("update-status");
+const updateInstallButton = document.getElementById("update-install");
+const updateProgress = document.getElementById("update-progress");
+
+function showUpdateBanner(version) {
+  document.getElementById("update-banner-text").textContent =
+    "FluxGen " + version + " is available.";
+  document.getElementById("update-banner").hidden = false;
+}
+
+/* Check for an update. In quiet mode (startup) a failed check
+   stays silent and only a found update is surfaced. */
+async function checkUpdates(quiet) {
+  let info;
+  try {
+    info = await invoke("check_for_update");
+  } catch (e) {
+    if (!quiet) {
+      showError(e, "check_for_update");
+    }
+    return;
+  }
+  if (info) {
+    updateStatus.textContent = "Update available: FluxGen " + info.version + ".";
+    updateInstallButton.hidden = false;
+    updateInstallButton.textContent = "Download and install " + info.version;
+    showUpdateBanner(info.version);
+  } else if (!quiet) {
+    updateStatus.textContent = "FluxGen is up to date.";
+    updateInstallButton.hidden = true;
+  }
+}
+
+document
+  .getElementById("update-check")
+  .addEventListener("click", () => checkUpdates(false));
+
+document
+  .getElementById("update-banner-view")
+  .addEventListener("click", () => {
+    document.getElementById("update-banner").hidden = true;
+    document.querySelector('[data-page="settings"]').click();
+  });
+
+document
+  .getElementById("update-banner-dismiss")
+  .addEventListener("click", () => {
+    document.getElementById("update-banner").hidden = true;
+  });
+
+updateInstallButton.addEventListener("click", async () => {
+  updateInstallButton.disabled = true;
+  updateProgress.textContent = "Downloading the update…";
+  const result = await call("install_update", {});
+  if (result === undefined) {
+    updateInstallButton.disabled = false;
+    updateProgress.textContent = "";
+  }
+  // On success the application exits as the installer launches.
+});
+
+window.__TAURI__.event.listen("update-progress", (event) => {
+  updateProgress.textContent =
+    "Downloading the update — " +
+    formatGB(event.payload.downloaded_bytes) +
+    " downloaded.";
+});
+
+// ---------------------------------------------------------------------------
 // Startup
 // ---------------------------------------------------------------------------
 
@@ -610,4 +754,5 @@ document.getElementById("lora-variant").addEventListener("change", loadLoras);
   await loadVariants();
   await refreshEngineStatus();
   renderQueue();
+  checkUpdates(true);
 })();

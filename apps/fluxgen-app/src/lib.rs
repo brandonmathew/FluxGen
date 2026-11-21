@@ -49,6 +49,9 @@ pub struct AppState {
     pub engine: tokio::sync::Mutex<Option<EngineProcess>>,
     /// In-flight variant downloads.
     pub downloads: Arc<DownloadRegistry>,
+    /// An application update that has been found and is ready
+    /// to install.
+    pub pending_update: tokio::sync::Mutex<Option<tauri_plugin_updater::Update>>,
 }
 
 fn err_string(e: AppError) -> String {
@@ -137,15 +140,32 @@ pub struct GalleryDto {
     pub settings_json: String,
 }
 
-/// Bundled engine identity and presence.
+/// Pinned engine identity and installation state.
 #[derive(Serialize)]
 pub struct EngineInfoDto {
-    /// Bundled engine release string.
+    /// Pinned engine release string.
     pub version: String,
-    /// Whether the engine binary is present in the engine folder.
-    pub bundled: bool,
+    /// Installation state: `current`, `outdated`, or `missing`.
+    pub state: String,
     /// Full path the engine binary is expected at.
     pub binary_path: String,
+}
+
+/// Information about an available application update.
+#[derive(Serialize, Clone)]
+pub struct UpdateInfoDto {
+    /// Version of the available update.
+    pub version: String,
+    /// Release notes, when the release provides them.
+    pub notes: Option<String>,
+}
+
+/// Update download progress, emitted as an `update-progress`
+/// event.
+#[derive(Serialize, Clone)]
+pub struct UpdateProgressDto {
+    /// Bytes downloaded so far.
+    pub downloaded_bytes: u64,
 }
 
 /// Progress of one variant download, emitted as a
@@ -208,19 +228,45 @@ fn get_system_info(state: State<'_, AppState>) -> Result<SystemInfoDto, String> 
     })
 }
 
-/// Bundled engine version and whether the binary is in place.
-#[tauri::command]
-fn get_engine_info(state: State<'_, AppState>) -> Result<EngineInfoDto, String> {
+/// Path of the engine binary inside the engine folder.
+fn engine_binary_path(paths: &DataPaths) -> PathBuf {
     let binary_name = if cfg!(windows) {
         "sd-server.exe"
     } else {
         "sd-server"
     };
-    let binary_path = state.paths.engine.join(binary_name);
+    paths.engine.join(binary_name)
+}
+
+/// Installation state of the pinned engine: `current`,
+/// `outdated` (a different release's marker is present), or
+/// `missing` (no binary). An engine folder with a binary but
+/// no marker predates markers (the v0.1.3 bundled build) and
+/// is adopted as current.
+fn engine_state(paths: &DataPaths) -> &'static str {
+    if !engine_binary_path(paths).is_file() {
+        return "missing";
+    }
+    let marker = paths.engine.join("engine-version.txt");
+    match std::fs::read_to_string(&marker) {
+        Ok(text) if text.trim() == fluxgen_engine::ENGINE_RELEASE_ID => "current",
+        Ok(_) => "outdated",
+        Err(_) => {
+            let _ = std::fs::write(&marker, fluxgen_engine::ENGINE_RELEASE_ID);
+            "current"
+        }
+    }
+}
+
+/// Pinned engine version and its installation state.
+#[tauri::command]
+fn get_engine_info(state: State<'_, AppState>) -> Result<EngineInfoDto, String> {
     Ok(EngineInfoDto {
         version: fluxgen_engine::ENGINE_VERSION.to_string(),
-        bundled: binary_path.is_file(),
-        binary_path: binary_path.to_string_lossy().into_owned(),
+        state: engine_state(&state.paths).to_string(),
+        binary_path: engine_binary_path(&state.paths)
+            .to_string_lossy()
+            .into_owned(),
     })
 }
 
@@ -371,31 +417,52 @@ async fn start_variant_download(
         .filter(|t| fluxgen_models::download::verify_file(t, &t.destination).is_err())
         .collect();
 
+    let job_variant = variant_id.clone();
+    begin_download(&app, &state, variant_id, move |runner_app| async move {
+        run_variant_download(runner_app, job_variant, pending).await
+    })
+    .await
+}
+
+/// Spawn a background download under `key`, registering it for
+/// cancellation. The job emits its own progress events; this
+/// wrapper emits exactly one `download-finished` event when
+/// the job ends, unless the download was cancelled (the cancel
+/// command emits it instead).
+async fn begin_download<F, Fut>(
+    app: &AppHandle,
+    state: &AppState,
+    key: String,
+    make_job: F,
+) -> Result<(), String>
+where
+    F: FnOnce(AppHandle) -> Fut + Send + 'static,
+    Fut: std::future::Future<Output = Result<(), String>> + Send + 'static,
+{
     let registry = state.downloads.clone();
     let cancelled = Arc::new(AtomicBool::new(false));
     let runner_cancelled = cancelled.clone();
     let runner_app = app.clone();
-    let runner_variant = variant_id.clone();
+    let runner_key = key.clone();
     let handle = tokio::spawn(async move {
-        let result =
-            run_variant_download(runner_app.clone(), runner_variant.clone(), pending).await;
+        let result = make_job(runner_app.clone()).await;
         // Unregister, but only our own slot: a cancel removes
-        // the slot itself, and a newer download for the same
-        // variant must not be disturbed.
+        // the slot itself, and a newer download under the same
+        // key must not be disturbed.
         let mut map = registry.lock().await;
         let ours = map
-            .get(&runner_variant)
+            .get(&runner_key)
             .map(|slot| Arc::ptr_eq(&slot.cancelled, &runner_cancelled))
             .unwrap_or(false);
         if ours {
-            map.remove(&runner_variant);
+            map.remove(&runner_key);
         }
         drop(map);
         if !runner_cancelled.load(Ordering::SeqCst) {
             let _ = runner_app.emit(
                 "download-finished",
                 DownloadFinishedDto {
-                    variant_id: runner_variant,
+                    variant_id: runner_key,
                     ok: result.is_ok(),
                     error: result.err(),
                 },
@@ -404,15 +471,40 @@ async fn start_variant_download(
     });
 
     let mut map = state.downloads.lock().await;
-    if map.contains_key(&variant_id) {
+    if map.contains_key(&key) {
         handle.abort();
-        return Err(format!(
-            "a download for {} is already running",
-            variant.display_name()
-        ));
+        return Err(format!("a download for {key} is already running"));
     }
-    map.insert(variant_id, DownloadSlot { cancelled, handle });
+    map.insert(key, DownloadSlot { cancelled, handle });
     Ok(())
+}
+
+/// Cancel the download registered under `key`, reporting the
+/// cancellation through the same `download-finished` event a
+/// completion would use.
+async fn cancel_download(
+    app: &AppHandle,
+    state: &AppState,
+    key: &str,
+    message: &str,
+) -> Result<(), String> {
+    let slot = state.downloads.lock().await.remove(key);
+    match slot {
+        Some(slot) => {
+            slot.cancelled.store(true, Ordering::SeqCst);
+            slot.handle.abort();
+            let _ = app.emit(
+                "download-finished",
+                DownloadFinishedDto {
+                    variant_id: key.to_string(),
+                    ok: false,
+                    error: Some(message.to_string()),
+                },
+            );
+            Ok(())
+        }
+        None => Err("no download is running for this item".to_string()),
+    }
 }
 
 /// Cancel a running variant download. Partial files stay on
@@ -423,26 +515,177 @@ async fn cancel_variant_download(
     state: State<'_, AppState>,
     variant_id: String,
 ) -> Result<(), String> {
-    let slot = state.downloads.lock().await.remove(&variant_id);
-    match slot {
-        Some(slot) => {
-            slot.cancelled.store(true, Ordering::SeqCst);
-            slot.handle.abort();
-            let _ = app.emit(
-                "download-finished",
-                DownloadFinishedDto {
-                    variant_id,
-                    ok: false,
-                    error: Some(
-                        "Download cancelled. Partial files are kept and resume on the next download."
-                            .to_string(),
-                    ),
+    cancel_download(
+        &app,
+        &state,
+        &variant_id,
+        "Download cancelled. Partial files are kept and resume on the next download.",
+    )
+    .await
+}
+
+/// Download and install the pinned engine into the engine
+/// folder: the bundle archive is fetched with the same
+/// resumable, verified downloader as the models, extracted,
+/// and marked with the pinned release id.
+async fn run_engine_download(
+    app: AppHandle,
+    zip_path: PathBuf,
+    engine_dir: PathBuf,
+) -> Result<(), String> {
+    let task = DownloadTask {
+        url: fluxgen_engine::ENGINE_DOWNLOAD_URL.to_string(),
+        destination: zip_path.clone(),
+        expected_size_bytes: fluxgen_engine::ENGINE_DOWNLOAD_SIZE_BYTES,
+        expected_sha256: Some(fluxgen_engine::ENGINE_DOWNLOAD_SHA256.to_string()),
+    };
+    if fluxgen_models::download::verify_file(&task, &zip_path).is_err() {
+        let progress_app = app.clone();
+        let mut last_percent: u64 = u64::MAX;
+        download_file(&task, move |written, total| {
+            let percent = written
+                .checked_mul(100)
+                .and_then(|scaled| scaled.checked_div(total))
+                .unwrap_or(100);
+            if percent == last_percent {
+                return;
+            }
+            last_percent = percent;
+            let _ = progress_app.emit(
+                "download-progress",
+                DownloadProgressDto {
+                    variant_id: "engine".to_string(),
+                    file_name: "engine bundle archive".to_string(),
+                    file_index: 1,
+                    files_total: 1,
+                    file_downloaded_bytes: written,
+                    file_total_bytes: total,
+                    overall_downloaded_bytes: written,
+                    overall_total_bytes: total,
                 },
             );
-            Ok(())
-        }
-        None => Err("no download is running for this variant".to_string()),
+        })
+        .await
+        .map_err(err_string)?;
     }
+    let extract_zip = zip_path.clone();
+    let extract_dir = engine_dir.clone();
+    tokio::task::spawn_blocking(move || extract_engine_archive(&extract_zip, &extract_dir))
+        .await
+        .map_err(|e| format!("engine extraction task failed: {e}"))??;
+    std::fs::write(
+        engine_dir.join("engine-version.txt"),
+        fluxgen_engine::ENGINE_RELEASE_ID,
+    )
+    .map_err(|e| e.to_string())?;
+    let _ = std::fs::remove_file(&zip_path);
+    Ok(())
+}
+
+/// Extract the engine bundle archive into the engine folder.
+/// Entries with paths that would escape the folder are
+/// rejected.
+fn extract_engine_archive(zip_path: &PathBuf, engine_dir: &PathBuf) -> Result<(), String> {
+    let file = std::fs::File::open(zip_path).map_err(|e| e.to_string())?;
+    let mut archive = zip::ZipArchive::new(file)
+        .map_err(|e| format!("engine archive is not a valid zip file: {e}"))?;
+    std::fs::create_dir_all(engine_dir).map_err(|e| e.to_string())?;
+    for i in 0..archive.len() {
+        let mut entry = archive.by_index(i).map_err(|e| e.to_string())?;
+        let name = entry
+            .enclosed_name()
+            .ok_or_else(|| format!("engine archive entry {} has an unsafe path", entry.name()))?;
+        let out = engine_dir.join(name);
+        if entry.is_dir() {
+            std::fs::create_dir_all(&out).map_err(|e| e.to_string())?;
+        } else {
+            if let Some(parent) = out.parent() {
+                std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+            }
+            let mut writer = std::fs::File::create(&out).map_err(|e| e.to_string())?;
+            std::io::copy(&mut entry, &mut writer).map_err(|e| e.to_string())?;
+        }
+    }
+    Ok(())
+}
+
+/// Start downloading the pinned engine in the background.
+/// Progress and outcome arrive through the same download
+/// events as model downloads, under the key `engine`.
+#[tauri::command]
+async fn start_engine_download(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
+    let zip_path = state.paths.root.join("engine-bundle.zip");
+    let engine_dir = state.paths.engine.clone();
+    begin_download(&app, &state, "engine".to_string(), move |runner_app| async move {
+        run_engine_download(runner_app, zip_path, engine_dir).await
+    })
+    .await
+}
+
+/// Cancel a running engine download. The partial archive
+/// stays on disk and resumes on the next download.
+#[tauri::command]
+async fn cancel_engine_download(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
+    cancel_download(
+        &app,
+        &state,
+        "engine",
+        "Engine download cancelled. The partial archive is kept and resumes on the next download.",
+    )
+    .await
+}
+
+/// Check GitHub Releases for an application update. A found
+/// update is held for `install_update`; nothing is downloaded
+/// or installed by the check itself.
+#[tauri::command]
+async fn check_for_update(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<Option<UpdateInfoDto>, String> {
+    use tauri_plugin_updater::UpdaterExt;
+    let updater = app.updater().map_err(|e| e.to_string())?;
+    let found = updater.check().await.map_err(|e| e.to_string())?;
+    let info = found.as_ref().map(|update| UpdateInfoDto {
+        version: update.version.clone(),
+        notes: update.body.clone(),
+    });
+    *state.pending_update.lock().await = found;
+    Ok(info)
+}
+
+/// Download and install the update found by
+/// `check_for_update`. The signature is verified by the
+/// updater before anything installs. On success the installer
+/// launches and the application exits so its files can be
+/// replaced.
+#[tauri::command]
+async fn install_update(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
+    let update = state
+        .pending_update
+        .lock()
+        .await
+        .take()
+        .ok_or_else(|| "no update is ready to install; check for updates first".to_string())?;
+    let progress_app = app.clone();
+    let mut downloaded: u64 = 0;
+    update
+        .download_and_install(
+            move |chunk_length, _content_length| {
+                downloaded += chunk_length as u64;
+                let _ = progress_app.emit(
+                    "update-progress",
+                    UpdateProgressDto {
+                        downloaded_bytes: downloaded,
+                    },
+                );
+            },
+            || {},
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+    app.exit(0);
+    Ok(())
 }
 
 /// Resolve the engine launch configuration for a variant at a
@@ -495,12 +738,7 @@ fn engine_config_for(
             variant.display_name()
         ))
     })?;
-    let binary_name = if cfg!(windows) {
-        "sd-server.exe"
-    } else {
-        "sd-server"
-    };
-    let binary_path = paths.engine.join(binary_name);
+    let binary_path = engine_binary_path(paths);
     Ok(EngineConfig {
         binary_path,
         port: ENGINE_PORT,
@@ -764,10 +1002,12 @@ pub fn run() {
         store: Mutex::new(store),
         engine: tokio::sync::Mutex::new(None),
         downloads: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+        pending_update: tokio::sync::Mutex::new(None),
     };
 
     tauri::Builder::default()
         .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_dialog::init())
         .manage(state)
         .invoke_handler(tauri::generate_handler![
             get_system_info,
@@ -775,6 +1015,10 @@ pub fn run() {
             list_variants,
             start_variant_download,
             cancel_variant_download,
+            start_engine_download,
+            cancel_engine_download,
+            check_for_update,
+            install_update,
             get_quant_recommendation,
             engine_start,
             engine_stop,

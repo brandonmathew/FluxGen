@@ -7,6 +7,25 @@ Semantic Versioning.
 
 ## [Unreleased]
 
+### Added
+
+- Signed in-app updates: the application checks GitHub
+  Releases, and an approved update downloads, verifies its
+  signature, installs in place, and restarts the application
+  (Issue #3).
+- The pinned engine is downloaded on first run from the
+  engine release — resumable, and verified by size and
+  SHA-256 — and the Models page shows the engine
+  installation state with download and update actions
+  (Issue #7).
+- Image-to-image source image is chosen with a file picker
+  instead of a typed path (Issue #13).
+
+### Removed
+
+- The engine bundle from the installer and portable
+  downloads; both now contain the application only.
+
 ## [0.1.3] - 2026-11-20
 
 ### Fixed
