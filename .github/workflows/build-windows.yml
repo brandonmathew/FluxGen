@@ -18,7 +18,9 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: apps/fluxgen-app
-      - uses: taiki-e/install-action@tauri-cli
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: tauri-cli
       - name: Build application and NSIS bundle
         working-directory: apps/fluxgen-app
         run: cargo tauri build
