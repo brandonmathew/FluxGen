@@ -86,6 +86,11 @@ impl DataPaths {
     pub fn variant_models_dir(&self, variant: crate::Variant) -> PathBuf {
         self.models.join(variant.id())
     }
+
+    /// Per-variant LoRA directory inside the LoRA library.
+    pub fn variant_loras_dir(&self, variant: crate::Variant) -> PathBuf {
+        self.loras.join(variant.id())
+    }
 }
 
 #[cfg(test)]

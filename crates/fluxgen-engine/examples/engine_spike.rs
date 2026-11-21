@@ -28,6 +28,7 @@ async fn main() -> ExitCode {
         model_path: PathBuf::from("spike-model.gguf"),
         text_encoder_paths: vec![PathBuf::from("spike-encoder.gguf")],
         vae_path: PathBuf::from("spike-ae.safetensors"),
+        lora_model_dir: None,
         startup_timeout_secs: 20,
     };
 

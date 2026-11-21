@@ -44,6 +44,11 @@ pub enum AppError {
         output: String,
     },
 
+    /// A request to the running engine failed or returned an
+    /// error.
+    #[error("engine request failed: {0}")]
+    EngineRequest(String),
+
     /// The engine did not become ready within the allowed time.
     #[error("engine did not become ready within {timeout_secs}s: {output}")]
     EngineTimeout {

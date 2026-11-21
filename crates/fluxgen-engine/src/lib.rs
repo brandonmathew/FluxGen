@@ -5,9 +5,11 @@
 //! answer, detects unexpected exit (returning the captured output
 //! as part of the error), and shuts the process down cleanly.
 
+pub mod client;
 pub mod config;
 pub mod process;
 
+pub use client::{generate, GenerationRequest, LoraRequest};
 pub use config::EngineConfig;
 pub use process::EngineProcess;
 

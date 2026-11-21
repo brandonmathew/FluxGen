@@ -109,6 +109,22 @@ NOT PROVEN by this run: CUDA execution, the Chroma and FLUX.1
 variants against the real server, and generation through the
 application on the target Windows machine (Issue #2).
 
+## Generation client — PROVEN on Linux (CPU), 2026-11-21
+
+- The engine crate's generation client (the code path the
+  application queue runs) generated a PNG from the same real
+  server and Klein files: the `generation_client_generates_a_png`
+  integration test passed in 192.77 s, and the returned bytes
+  carry the PNG signature.
+- The request shape (fields, the `lora` array of
+  `{path, multiplier}` resolved inside the server's
+  `--lora-model-dir`, `init_images` plus `denoising_strength`
+  for image-to-image) was taken from the pinned server's own
+  route source before the client was written.
+
+NOT PROVEN by this run: generation with a LoRA applied, and
+image-to-image through the client.
+
 ## Tauri application — NOT PROVEN on Windows
 
 - `cargo check` for `apps/fluxgen-app` on the Linux build machine

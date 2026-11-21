@@ -38,6 +38,7 @@ fn klein_config(
         model_path: models.join("flux-2-klein-4b-Q4_K_M.gguf"),
         text_encoder_paths: vec![models.join("flux2-klein-4b-uncensored-q4_k_m.gguf")],
         vae_path: models.join("ae.safetensors"),
+        lora_model_dir: None,
         startup_timeout_secs,
     }
 }
@@ -122,6 +123,50 @@ async fn real_server_loads_klein_and_answers_generation() {
         first.len() > 1000,
         "image payload is non-trivial ({} chars)",
         first.len()
+    );
+
+    engine.shutdown().await.expect("clean shutdown");
+}
+
+/// The generation client used by the application must produce
+/// a PNG from the real server (Issue #15).
+#[tokio::test]
+async fn generation_client_generates_a_png() {
+    let (Some(binary), Some(models)) = (
+        env_path("FLUXGEN_SD_SERVER_BIN"),
+        env_path("FLUXGEN_KLEIN_DIR"),
+    ) else {
+        return;
+    };
+    let port = free_port();
+    let mut engine =
+        EngineProcess::launch(klein_config(binary, &models, port, 900)).expect("launch");
+    if let Err(e) = engine.wait_until_ready().await {
+        panic!("server did not become ready: {e}");
+    }
+
+    let images = fluxgen_engine::generate(
+        &engine.config().base_url(),
+        &fluxgen_engine::GenerationRequest {
+            prompt: "a red cube on a wooden table".to_string(),
+            negative_prompt: String::new(),
+            seed: 42,
+            steps: 1,
+            cfg_scale: 1.0,
+            width: 256,
+            height: 256,
+            sampler_name: "euler".to_string(),
+            init_image: None,
+            denoising_strength: None,
+            loras: Vec::new(),
+        },
+    )
+    .await
+    .expect("client generation succeeds");
+    assert_eq!(images.len(), 1);
+    assert!(
+        images[0].starts_with(&[0x89, b'P', b'N', b'G']),
+        "the returned image is a PNG"
     );
 
     engine.shutdown().await.expect("clean shutdown");

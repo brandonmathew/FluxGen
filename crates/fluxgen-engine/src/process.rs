@@ -223,6 +223,7 @@ mod tests {
             model_path: std::path::PathBuf::from("m.gguf"),
             text_encoder_paths: vec![],
             vae_path: std::path::PathBuf::from("ae.safetensors"),
+            lora_model_dir: None,
             startup_timeout_secs: 1,
         };
         match EngineProcess::launch(config) {

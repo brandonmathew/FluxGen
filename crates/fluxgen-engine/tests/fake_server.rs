@@ -75,6 +75,7 @@ fn config(binary: PathBuf, port: u16) -> EngineConfig {
         model_path: PathBuf::from("model.gguf"),
         text_encoder_paths: vec![PathBuf::from("enc.gguf")],
         vae_path: PathBuf::from("ae.safetensors"),
+        lora_model_dir: None,
         startup_timeout_secs: 15,
     }
 }

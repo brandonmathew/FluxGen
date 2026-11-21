@@ -18,6 +18,9 @@ pub struct EngineConfig {
     pub text_encoder_paths: Vec<PathBuf>,
     /// VAE file.
     pub vae_path: PathBuf,
+    /// Directory the server resolves per-request LoRAs from,
+    /// when LoRAs are used with this variant.
+    pub lora_model_dir: Option<PathBuf>,
     /// Seconds to wait for the health endpoint before failing.
     pub startup_timeout_secs: u64,
 }
@@ -47,6 +50,10 @@ impl EngineConfig {
             "--params-backend".to_string(),
             "te=disk,vae=disk".to_string(),
         ];
+        if let Some(dir) = &self.lora_model_dir {
+            args.push("--lora-model-dir".to_string());
+            args.push(dir.to_string_lossy().into_owned());
+        }
         // sd-server encoder flags: CLIP-L uses --clip_l, T5-XXL
         // uses --t5xxl, a single Qwen3 encoder uses --llm.
         match self.text_encoder_paths.len() {
@@ -79,6 +86,7 @@ mod tests {
                 .map(|i| PathBuf::from(format!("/models/enc{i}.gguf")))
                 .collect(),
             vae_path: PathBuf::from("/models/ae.safetensors"),
+            lora_model_dir: None,
             startup_timeout_secs: 30,
         }
     }
@@ -104,6 +112,17 @@ mod tests {
         let joined = args.join(" ");
         assert!(joined.contains("--clip_l /models/enc0.gguf"), "{joined}");
         assert!(joined.contains("--t5xxl /models/enc1.gguf"), "{joined}");
+    }
+
+    #[test]
+    fn lora_dir_is_passed_when_set() {
+        let mut cfg = config(1);
+        assert!(!cfg.server_args().join(" ").contains("--lora-model-dir"));
+        cfg.lora_model_dir = Some(PathBuf::from("/loras/flux"));
+        assert!(cfg
+            .server_args()
+            .join(" ")
+            .contains("--lora-model-dir /loras/flux"));
     }
 
     #[test]
