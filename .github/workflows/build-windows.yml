@@ -32,14 +32,10 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
           New-Item -ItemType Directory -Force dist | Out-Null
-          # Portable download: the application on its own. The
-          # engine and all data folders are created next to it on
+          # Portable download: the bare executable. The engine
+          # and all data folders are created next to it on
           # first run.
-          $portable = "dist\FluxGen-portable"
-          New-Item -ItemType Directory -Force $portable | Out-Null
-          Copy-Item apps/fluxgen-app/target/release/fluxgen-app.exe "$portable\FluxGen.exe"
-          Compress-Archive -Path $portable -DestinationPath "dist\FluxGen-portable.zip"
-          Remove-Item $portable -Recurse -Force
+          Copy-Item apps/fluxgen-app/target/release/fluxgen-app.exe "dist\FluxGen.exe"
           # Installer for manual installs. The same signed
           # installer is what the in-app updater downloads: the
           # bundler signs it in place and leaves the signature
