@@ -58,7 +58,11 @@ mod tests {
 
     #[test]
     fn default_entry_is_valid() {
-        let e = LoraEntry::new("detail", PathBuf::from("detail.safetensors"), Variant::ChromaHd);
+        let e = LoraEntry::new(
+            "detail",
+            PathBuf::from("detail.safetensors"),
+            Variant::ChromaHd,
+        );
         assert!(e.validate().is_ok());
         assert!(e.enabled);
         assert_eq!(e.weight, 1.0);

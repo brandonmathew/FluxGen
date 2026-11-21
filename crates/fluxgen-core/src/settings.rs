@@ -142,9 +142,10 @@ mod tests {
     use super::*;
 
     fn valid() -> GenerationSettings {
-        let mut s = GenerationSettings::default();
-        s.prompt = "a lighthouse at dusk".to_string();
-        s
+        GenerationSettings {
+            prompt: "a lighthouse at dusk".to_string(),
+            ..GenerationSettings::default()
+        }
     }
 
     #[test]

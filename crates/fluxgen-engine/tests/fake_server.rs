@@ -89,7 +89,9 @@ async fn launches_fake_server_waits_for_health_and_shuts_down() {
     // Give the reader task a moment to capture the banner line.
     tokio::time::sleep(std::time::Duration::from_millis(300)).await;
     assert!(
-        engine.captured_output().contains("fake sd-server listening"),
+        engine
+            .captured_output()
+            .contains("fake sd-server listening"),
         "captured output: {}",
         engine.captured_output()
     );

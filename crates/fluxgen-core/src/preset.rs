@@ -23,7 +23,10 @@ impl Preset {
     /// Validate the preset name, its settings, and every LoRA.
     pub fn validate(&self) -> Result<()> {
         if self.name.trim().is_empty() {
-            return Err(AppError::validation("preset name", "name must not be empty"));
+            return Err(AppError::validation(
+                "preset name",
+                "name must not be empty",
+            ));
         }
         self.settings.validate()?;
         for lora in &self.loras {
@@ -50,8 +53,10 @@ mod tests {
     use std::path::PathBuf;
 
     fn preset() -> Preset {
-        let mut settings = GenerationSettings::default();
-        settings.prompt = "portrait".to_string();
+        let settings = GenerationSettings {
+            prompt: "portrait".to_string(),
+            ..GenerationSettings::default()
+        };
         Preset {
             name: "Portrait".to_string(),
             variant: Variant::ChromaHd,

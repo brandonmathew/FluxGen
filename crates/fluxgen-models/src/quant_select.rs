@@ -116,7 +116,9 @@ fn pick_from_profile(
         )
     })?;
 
-    let total = profile.total_size_bytes(option.quant).unwrap_or(option.size_bytes);
+    let total = profile
+        .total_size_bytes(option.quant)
+        .unwrap_or(option.size_bytes);
     if total > specs.free_disk_bytes {
         return Err(AppError::validation(
             "quant",
@@ -151,7 +153,11 @@ fn pick_from_profile(
 /// budget, used after a failed engine load test. Returns the first
 /// fitting level at or below `start`, or `None` when even the
 /// smallest level does not fit.
-pub fn step_down_until_fit(variant: Variant, start: Quant, vram_budget_bytes: u64) -> Option<Quant> {
+pub fn step_down_until_fit(
+    variant: Variant,
+    start: Quant,
+    vram_budget_bytes: u64,
+) -> Option<Quant> {
     let profile = profile_for(variant);
     let mut current = Some(start);
     while let Some(quant) = current {
@@ -192,22 +198,22 @@ mod tests {
         // Budget: 12 GB VRAM - 1.5 GB sampling reserve - 1.0 GB VAE
         // allowance = 9.5 GB. Q8_0 (9.74 GB) exceeds the budget;
         // Q6_K (7.65 GB) is the largest level that fits.
-        let choice = pick_quant(Variant::ChromaHd, &target_machine(), 1024, 1024)
-            .expect("chroma pick");
+        let choice =
+            pick_quant(Variant::ChromaHd, &target_machine(), 1024, 1024).expect("chroma pick");
         assert_eq!(choice.quant, Quant::Q6);
     }
 
     #[test]
     fn flux1_pick_on_target_machine_is_q5() {
-        let choice = pick_quant(Variant::Flux1Dev, &target_machine(), 1024, 1024)
-            .expect("flux1 pick");
+        let choice =
+            pick_quant(Variant::Flux1Dev, &target_machine(), 1024, 1024).expect("flux1 pick");
         assert_eq!(choice.quant, Quant::Q5);
     }
 
     #[test]
     fn klein_pick_on_target_machine_is_top_quant() {
-        let choice = pick_quant(Variant::Flux2Klein4b, &target_machine(), 1024, 1024)
-            .expect("klein pick");
+        let choice =
+            pick_quant(Variant::Flux2Klein4b, &target_machine(), 1024, 1024).expect("klein pick");
         assert_eq!(choice.quant, Quant::Q8);
     }
 
@@ -239,6 +245,9 @@ mod tests {
             Some(Quant::Q6)
         );
         // Budget below the smallest Chroma quant (5.57 GB).
-        assert_eq!(step_down_until_fit(Variant::ChromaHd, Quant::Q6, 5 * GB), None);
+        assert_eq!(
+            step_down_until_fit(Variant::ChromaHd, Quant::Q6, 5 * GB),
+            None
+        );
     }
 }

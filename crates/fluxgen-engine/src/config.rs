@@ -52,25 +52,13 @@ impl EngineConfig {
         match self.text_encoder_paths.len() {
             1 => {
                 args.push("--llm".to_string());
-                args.push(
-                    self.text_encoder_paths[0]
-                        .to_string_lossy()
-                        .into_owned(),
-                );
+                args.push(self.text_encoder_paths[0].to_string_lossy().into_owned());
             }
             2 => {
                 args.push("--clip_l".to_string());
-                args.push(
-                    self.text_encoder_paths[0]
-                        .to_string_lossy()
-                        .into_owned(),
-                );
+                args.push(self.text_encoder_paths[0].to_string_lossy().into_owned());
                 args.push("--t5xxl".to_string());
-                args.push(
-                    self.text_encoder_paths[1]
-                        .to_string_lossy()
-                        .into_owned(),
-                );
+                args.push(self.text_encoder_paths[1].to_string_lossy().into_owned());
             }
             _ => {}
         }
@@ -99,7 +87,10 @@ mod tests {
     fn args_include_disk_params_backend() {
         let args = config(1).server_args();
         let joined = args.join(" ");
-        assert!(joined.contains("--params-backend te=disk,vae=disk"), "{joined}");
+        assert!(
+            joined.contains("--params-backend te=disk,vae=disk"),
+            "{joined}"
+        );
         assert!(joined.contains("--listen-port 1234"), "{joined}");
         assert!(joined.contains("--model /models/model.gguf"), "{joined}");
     }

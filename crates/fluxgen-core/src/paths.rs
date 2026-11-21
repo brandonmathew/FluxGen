@@ -54,7 +54,10 @@ impl DataPaths {
             }
         }
         let exe = std::env::current_exe()?;
-        let folder = exe.parent().map(PathBuf::from).unwrap_or_else(|| PathBuf::from("."));
+        let folder = exe
+            .parent()
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("."));
         Ok(DataPaths::from_root(folder))
     }
 
@@ -108,7 +111,13 @@ mod tests {
         let tmp = std::env::temp_dir().join(format!("fluxgen-paths-test-{}", std::process::id()));
         let paths = DataPaths::from_root(tmp.clone());
         paths.ensure_created().expect("create dirs");
-        for dir in [&paths.models, &paths.loras, &paths.outputs, &paths.presets, &paths.crashes] {
+        for dir in [
+            &paths.models,
+            &paths.loras,
+            &paths.outputs,
+            &paths.presets,
+            &paths.crashes,
+        ] {
             assert!(dir.is_dir(), "missing {}", dir.display());
         }
         std::fs::remove_dir_all(&tmp).expect("cleanup");

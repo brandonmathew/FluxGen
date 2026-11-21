@@ -156,11 +156,10 @@ impl EngineProcess {
     /// status; a non-zero exit returns
     /// [`AppError::EngineExited`] carrying the captured output.
     pub async fn wait_for_exit(&mut self) -> Result<std::process::ExitStatus, AppError> {
-        let status = self
-            .child
-            .wait()
-            .await
-            .map_err(|e| AppError::EngineUnavailable(format!("failed to wait for engine: {e}")))?;
+        let status =
+            self.child.wait().await.map_err(|e| {
+                AppError::EngineUnavailable(format!("failed to wait for engine: {e}"))
+            })?;
         self.exit_notify.notify_waiters();
         if status.success() {
             Ok(status)

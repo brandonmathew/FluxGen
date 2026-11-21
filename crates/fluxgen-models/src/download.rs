@@ -133,7 +133,8 @@ where
         offset = 0;
         append = false;
     }
-    if !response.status().is_success() && response.status() != reqwest::StatusCode::PARTIAL_CONTENT {
+    if !response.status().is_success() && response.status() != reqwest::StatusCode::PARTIAL_CONTENT
+    {
         return Err(AppError::Transfer(format!(
             "request to {} returned HTTP {}",
             task.url,

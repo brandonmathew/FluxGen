@@ -304,8 +304,10 @@ mod tests {
     #[test]
     fn preset_round_trip_and_delete() {
         let store = Store::open_in_memory().expect("store");
-        let mut settings = GenerationSettings::default();
-        settings.prompt = "harbor".to_string();
+        let settings = GenerationSettings {
+            prompt: "harbor".to_string(),
+            ..GenerationSettings::default()
+        };
         let preset = Preset {
             name: "Harbor".to_string(),
             variant: Variant::Flux1Dev,
@@ -331,7 +333,10 @@ mod tests {
             store.list_loras(Variant::ChromaHd).expect("list"),
             vec![entry]
         );
-        assert!(store.list_loras(Variant::Flux1Dev).expect("list").is_empty());
+        assert!(store
+            .list_loras(Variant::Flux1Dev)
+            .expect("list")
+            .is_empty());
         assert!(store
             .delete_lora(Variant::ChromaHd, "detail")
             .expect("delete"));

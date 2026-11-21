@@ -75,16 +75,16 @@ pub fn write_settings_chunk(path: &Path, settings_json: &str) -> Result<(), AppE
     let mut pos = 8usize;
     let mut inserted = false;
     while pos + 8 <= bytes.len() {
-        let length = u32::from_be_bytes([
-            bytes[pos],
-            bytes[pos + 1],
-            bytes[pos + 2],
-            bytes[pos + 3],
-        ]) as usize;
+        let length =
+            u32::from_be_bytes([bytes[pos], bytes[pos + 1], bytes[pos + 2], bytes[pos + 3]])
+                as usize;
         let chunk_type = &bytes[pos + 4..pos + 8];
         let chunk_end = pos + 8 + length + 4;
         if chunk_end > bytes.len() {
-            return Err(storage_err(format!("{} has a truncated chunk", path.display())));
+            return Err(storage_err(format!(
+                "{} has a truncated chunk",
+                path.display()
+            )));
         }
         let is_ours = chunk_type == b"tEXt" && is_settings_chunk(&bytes[pos + 8..pos + 8 + length]);
         if !inserted && (chunk_type == b"IDAT" || chunk_type == b"IEND") {

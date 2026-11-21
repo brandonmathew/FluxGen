@@ -91,66 +91,66 @@ fn free_disk_bytes(path: &Path) -> Result<u64, AppError> {
 
 /// Free bytes on the volume containing `path`.
 ///
-/// Implemented with the platform C library through a minimal FFI
-/// declaration on Linux (`statvfs`) — kept in this module so the
-/// rest of the crate stays free of platform calls.
+/// Linux implementation uses `statvfs` through a minimal FFI
+/// declaration kept in this module, so the rest of the crate stays
+/// free of platform calls.
+#[cfg(target_os = "linux")]
 fn fs_free_bytes(path: &Path) -> Result<u64, AppError> {
-    #[cfg(target_os = "linux")]
-    {
-        use std::os::unix::ffi::OsStrExt;
-        #[repr(C)]
-        struct Statvfs {
-            f_bsize: u64,
-            f_frsize: u64,
-            f_blocks: u64,
-            f_bfree: u64,
-            f_bavail: u64,
-            f_files: u64,
-            f_ffree: u64,
-            f_favail: u64,
-            f_fsid: u64,
-            f_flag: u64,
-            f_namemax: u64,
-            spare: [i32; 6],
-        }
-        extern "C" {
-            fn statvfs(path: *const std::ffi::c_char, buf: *mut Statvfs) -> i32;
-        }
-        let mut existing = path.to_path_buf();
-        while !existing.exists() {
-            if !existing.pop() {
-                break;
-            }
-        }
-        let c_path = std::ffi::CString::new(existing.as_os_str().as_bytes())
-            .map_err(|_| AppError::Storage("data root path contains a NUL byte".to_string()))?;
-        let mut buf = Statvfs {
-            f_bsize: 0,
-            f_frsize: 0,
-            f_blocks: 0,
-            f_bfree: 0,
-            f_bavail: 0,
-            f_files: 0,
-            f_ffree: 0,
-            f_favail: 0,
-            f_fsid: 0,
-            f_flag: 0,
-            f_namemax: 0,
-            spare: [0; 6],
-        };
-        let rc = unsafe { statvfs(c_path.as_ptr(), &mut buf) };
-        if rc != 0 {
-            return Err(AppError::Io(std::io::Error::last_os_error()));
-        }
-        return Ok(buf.f_bavail * buf.f_frsize);
+    use std::os::unix::ffi::OsStrExt;
+    #[repr(C)]
+    struct Statvfs {
+        f_bsize: u64,
+        f_frsize: u64,
+        f_blocks: u64,
+        f_bfree: u64,
+        f_bavail: u64,
+        f_files: u64,
+        f_ffree: u64,
+        f_favail: u64,
+        f_fsid: u64,
+        f_flag: u64,
+        f_namemax: u64,
+        spare: [i32; 6],
     }
-    #[cfg(not(target_os = "linux"))]
-    {
-        let _ = path;
-        Err(AppError::Storage(
-            "free disk detection is not implemented on this platform yet".to_string(),
-        ))
+    extern "C" {
+        fn statvfs(path: *const std::ffi::c_char, buf: *mut Statvfs) -> i32;
     }
+    let mut existing = path.to_path_buf();
+    while !existing.exists() {
+        if !existing.pop() {
+            break;
+        }
+    }
+    let c_path = std::ffi::CString::new(existing.as_os_str().as_bytes())
+        .map_err(|_| AppError::Storage("data root path contains a NUL byte".to_string()))?;
+    let mut buf = Statvfs {
+        f_bsize: 0,
+        f_frsize: 0,
+        f_blocks: 0,
+        f_bfree: 0,
+        f_bavail: 0,
+        f_files: 0,
+        f_ffree: 0,
+        f_favail: 0,
+        f_fsid: 0,
+        f_flag: 0,
+        f_namemax: 0,
+        spare: [0; 6],
+    };
+    let rc = unsafe { statvfs(c_path.as_ptr(), &mut buf) };
+    if rc != 0 {
+        return Err(AppError::Io(std::io::Error::last_os_error()));
+    }
+    Ok(buf.f_bavail * buf.f_frsize)
+}
+
+/// Free bytes on the volume containing `path`.
+#[cfg(not(target_os = "linux"))]
+fn fs_free_bytes(path: &Path) -> Result<u64, AppError> {
+    let _ = path;
+    Err(AppError::Storage(
+        "free disk detection is not implemented on this platform yet".to_string(),
+    ))
 }
 
 /// Detect GPU VRAM and name. On Linux this reads the DRM sysfs
