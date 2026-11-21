@@ -934,13 +934,14 @@ dependencies = [
 
 [[package]]
 name = "fluxgen-app"
-version = "0.1.8"
+version = "0.1.9"
 dependencies = [
  "base64 0.22.1",
  "fluxgen-core",
  "fluxgen-engine",
  "fluxgen-models",
  "fluxgen-store",
+ "reqwest 0.12.28",
  "serde",
  "serde_json",
  "tauri",
@@ -953,7 +954,7 @@ dependencies = [
 
 [[package]]
 name = "fluxgen-core"
-version = "0.1.8"
+version = "0.1.9"
 dependencies = [
  "serde",
  "serde_json",
@@ -962,7 +963,7 @@ dependencies = [
 
 [[package]]
 name = "fluxgen-engine"
-version = "0.1.8"
+version = "0.1.9"
 dependencies = [
  "base64 0.22.1",
  "fluxgen-core",
@@ -975,7 +976,7 @@ dependencies = [
 
 [[package]]
 name = "fluxgen-models"
-version = "0.1.8"
+version = "0.1.9"
 dependencies = [
  "fluxgen-core",
  "futures-util",
@@ -991,7 +992,7 @@ dependencies = [
 
 [[package]]
 name = "fluxgen-store"
-version = "0.1.8"
+version = "0.1.9"
 dependencies = [
  "fluxgen-core",
  "png 0.17.16",

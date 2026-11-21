@@ -7,6 +7,8 @@ Semantic Versioning.
 
 ## [Unreleased]
 
+## [0.1.9] - 2026-11-21
+
 ### Fixed
 
 - Portable copies now actually update in place (Issue
