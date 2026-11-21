@@ -290,8 +290,134 @@ async function variantCard(variant) {
     );
     card.appendChild(rec);
   }
+
+  const controls = el("div", "download-controls");
+  const quantSelect = el("select", "download-quant");
+  quantSelect.id = "download-quant-" + variant.id;
+  for (const quant of variant.quants) {
+    const option = document.createElement("option");
+    option.value = quant.label;
+    option.textContent =
+      quant.label + " — " + formatGB(quant.total_size_bytes) + " total";
+    quantSelect.appendChild(option);
+  }
+  if (choice) {
+    quantSelect.value = choice.label;
+  }
+  controls.appendChild(quantSelect);
+
+  const button = el(
+    "button",
+    "download-button",
+    variant.installed ? "Download again" : "Download"
+  );
+  button.type = "button";
+  button.id = "download-button-" + variant.id;
+  button.dataset.idleLabel = button.textContent;
+  button.addEventListener("click", () =>
+    toggleDownload(variant, quantSelect, button)
+  );
+  controls.appendChild(button);
+  card.appendChild(controls);
+
+  const progressWrap = el("div", "download-progress");
+  progressWrap.id = "download-progress-" + variant.id;
+  progressWrap.hidden = true;
+  const track = el("div", "progress-track");
+  const fill = el("div", "progress-fill");
+  fill.id = "download-fill-" + variant.id;
+  track.appendChild(fill);
+  progressWrap.appendChild(track);
+  const status = el("p", "download-status");
+  status.id = "download-status-" + variant.id;
+  progressWrap.appendChild(status);
+  card.appendChild(progressWrap);
+
   return card;
 }
+
+// ---------------------------------------------------------------------------
+// Variant downloads
+// ---------------------------------------------------------------------------
+
+const activeDownloads = new Set();
+
+function setDownloadUi(variantId, running) {
+  const button = document.getElementById("download-button-" + variantId);
+  const select = document.getElementById("download-quant-" + variantId);
+  const wrap = document.getElementById("download-progress-" + variantId);
+  if (button) {
+    button.textContent = running
+      ? "Cancel download"
+      : button.dataset.idleLabel || "Download";
+  }
+  if (select) {
+    select.disabled = running;
+  }
+  if (wrap) {
+    wrap.hidden = !running;
+  }
+}
+
+async function toggleDownload(variant, quantSelect) {
+  if (activeDownloads.has(variant.id)) {
+    await call("cancel_variant_download", { variantId: variant.id });
+    return;
+  }
+  const started = await call("start_variant_download", {
+    variantId: variant.id,
+    quantLabel: quantSelect.value,
+  });
+  if (started === undefined) {
+    return;
+  }
+  activeDownloads.add(variant.id);
+  setDownloadUi(variant.id, true);
+}
+
+window.__TAURI__.event.listen("download-progress", (event) => {
+  const p = event.payload;
+  const fill = document.getElementById("download-fill-" + p.variant_id);
+  const status = document.getElementById("download-status-" + p.variant_id);
+  if (!fill || !status) {
+    return;
+  }
+  const percent =
+    p.overall_total_bytes > 0
+      ? Math.floor((p.overall_downloaded_bytes * 100) / p.overall_total_bytes)
+      : 0;
+  fill.style.width = percent + "%";
+  status.textContent =
+    "File " +
+    p.file_index +
+    " of " +
+    p.files_total +
+    " — " +
+    p.file_name +
+    " — " +
+    formatGB(p.overall_downloaded_bytes) +
+    " of " +
+    formatGB(p.overall_total_bytes) +
+    " (" +
+    percent +
+    "%)";
+});
+
+window.__TAURI__.event.listen("download-finished", async (event) => {
+  const f = event.payload;
+  activeDownloads.delete(f.variant_id);
+  if (f.ok) {
+    await loadVariants();
+    for (const id of activeDownloads) {
+      setDownloadUi(id, true);
+    }
+  } else {
+    setDownloadUi(f.variant_id, false);
+    if (f.error) {
+      showError(f.error, "start_variant_download");
+    }
+  }
+});
 
 // ---------------------------------------------------------------------------
 // Engine controls

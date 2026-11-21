@@ -451,6 +451,38 @@ code {
   border-color: var(--ok);
 }
 
+.download-controls {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-top: 12px;
+}
+
+.download-progress {
+  margin-top: 10px;
+}
+
+.progress-track {
+  height: 8px;
+  background: var(--field);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.progress-fill {
+  height: 100%;
+  width: 0;
+  background: var(--accent);
+  transition: width 0.2s ease;
+}
+
+.download-status {
+  color: var(--muted);
+  font-size: 0.85em;
+  margin: 6px 0 0;
+}
+
 .quant-table {
   width: 100%;
   border-collapse: collapse;

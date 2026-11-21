@@ -6,7 +6,11 @@
 //! after download when its size matches the listing and, where the
 //! publisher provides one, its SHA-256 hash matches.
 
+use std::path::Path;
+
 use fluxgen_core::{Quant, Variant};
+
+use crate::download::DownloadTask;
 
 /// One downloadable file belonging to a variant.
 #[derive(Debug, Clone, PartialEq)]
@@ -52,6 +56,9 @@ pub struct QuantOption {
 pub struct VariantProfile {
     /// The variant described.
     pub variant: Variant,
+    /// Repository holding the diffusion model files, in
+    /// `owner/name` form.
+    pub diffusion_repo: &'static str,
     /// Files shared by every quantization of this variant
     /// (encoders, VAE, bundled LoRA).
     pub shared_files: &'static [ModelFile],
@@ -73,6 +80,61 @@ impl VariantProfile {
         let shared: u64 = self.shared_files.iter().map(|f| f.size_bytes).sum();
         Some(shared + option.size_bytes)
     }
+
+    /// The download tasks that install this variant at a
+    /// quantization into `dir`: the shared files in profile
+    /// order, then the diffusion model file. File names may
+    /// contain subfolders; the destination keeps them.
+    pub fn download_tasks(&self, quant: Quant, dir: &Path) -> Option<Vec<DownloadTask>> {
+        let option = self.quant_option(quant)?;
+        let mut tasks: Vec<DownloadTask> = self
+            .shared_files
+            .iter()
+            .map(|f| DownloadTask {
+                url: download_url(f.repo, f.file_name),
+                destination: dir.join(f.file_name),
+                expected_size_bytes: f.size_bytes,
+                expected_sha256: None,
+            })
+            .collect();
+        tasks.push(DownloadTask {
+            url: download_url(self.diffusion_repo, option.file_name),
+            destination: dir.join(option.file_name),
+            expected_size_bytes: option.size_bytes,
+            expected_sha256: None,
+        });
+        Some(tasks)
+    }
+
+    /// Quantizations whose complete file set is present in
+    /// `dir` with the exact listed sizes.
+    pub fn installed_quants(&self, dir: &Path) -> Vec<Quant> {
+        self.quant_options
+            .iter()
+            .filter(|option| {
+                let diffusion_ok = file_matches(dir.join(option.file_name), option.size_bytes);
+                let shared_ok = self
+                    .shared_files
+                    .iter()
+                    .all(|f| file_matches(dir.join(f.file_name), f.size_bytes));
+                diffusion_ok && shared_ok
+            })
+            .map(|option| option.quant)
+            .collect()
+    }
+}
+
+/// Whether a file exists with exactly the expected size.
+fn file_matches(path: std::path::PathBuf, expected_size_bytes: u64) -> bool {
+    std::fs::metadata(path)
+        .map(|meta| meta.is_file() && meta.len() == expected_size_bytes)
+        .unwrap_or(false)
+}
+
+/// The anonymous download URL for a file in a Hugging Face
+/// repository.
+fn download_url(repo: &str, file_name: &str) -> String {
+    format!("https://huggingface.co/{repo}/resolve/main/{file_name}")
 }
 
 // ---------------------------------------------------------------------------
@@ -245,16 +307,19 @@ pub fn profile_for(variant: Variant) -> VariantProfile {
     match variant {
         Variant::ChromaHd => VariantProfile {
             variant,
+            diffusion_repo: "silveroxides/Chroma1-HD-GGUF",
             shared_files: CHROMA_SHARED,
             quant_options: CHROMA_QUANTS,
         },
         Variant::Flux1Dev => VariantProfile {
             variant,
+            diffusion_repo: "city96/FLUX.1-dev-gguf",
             shared_files: FLUX1_SHARED,
             quant_options: FLUX1_QUANTS,
         },
         Variant::Flux2Klein4b => VariantProfile {
             variant,
+            diffusion_repo: "unsloth/FLUX.2-klein-4B-GGUF",
             shared_files: KLEIN_SHARED,
             quant_options: KLEIN_QUANTS,
         },
@@ -273,6 +338,69 @@ mod tests {
             assert!(!p.quant_options.is_empty());
             assert!(!p.shared_files.is_empty());
         }
+    }
+
+    #[test]
+    fn download_tasks_cover_the_full_file_set() {
+        let profile = profile_for(Variant::Flux2Klein4b);
+        let dir = Path::new("/models/klein");
+        let tasks = profile
+            .download_tasks(Quant::Q4, dir)
+            .expect("Klein publishes Q4");
+        // Two shared files (encoder, VAE) plus the diffusion model.
+        assert_eq!(tasks.len(), 3);
+        assert_eq!(
+            tasks[0].url,
+            "https://huggingface.co/nerualdreming/flux2-klein-4b-uncensored-text-encoder/resolve/main/flux2-klein-4b-uncensored-q4_k_m.gguf"
+        );
+        // The VAE file name keeps its subfolder in both the URL
+        // and the destination.
+        assert!(tasks[1]
+            .url
+            .ends_with("/resolve/main/vae/diffusion_pytorch_model.safetensors"));
+        assert_eq!(
+            tasks[1].destination,
+            dir.join("vae/diffusion_pytorch_model.safetensors")
+        );
+        let diffusion = tasks.last().expect("diffusion task");
+        assert_eq!(
+            diffusion.url,
+            "https://huggingface.co/unsloth/FLUX.2-klein-4B-GGUF/resolve/main/flux-2-klein-4b-Q4_K_M.gguf"
+        );
+        assert_eq!(diffusion.expected_size_bytes, 2_604_311_104);
+        let total: u64 = tasks.iter().map(|t| t.expected_size_bytes).sum();
+        assert_eq!(
+            Some(total),
+            profile.total_size_bytes(Quant::Q4),
+            "task sizes must add up to the profile total"
+        );
+    }
+
+    #[test]
+    fn installed_quants_requires_the_exact_file_set() {
+        let profile = profile_for(Variant::Flux2Klein4b);
+        let dir = std::env::temp_dir().join(format!("fluxgen-profile-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(profile.installed_quants(&dir).is_empty());
+
+        // Write every Q4 file at its exact size (sparse), plus a
+        // wrong-size file for another quant.
+        let tasks = profile
+            .download_tasks(Quant::Q4, &dir)
+            .expect("Klein publishes Q4");
+        for task in &tasks {
+            std::fs::create_dir_all(task.destination.parent().unwrap()).unwrap();
+            let file = std::fs::File::create(&task.destination).unwrap();
+            file.set_len(task.expected_size_bytes).unwrap();
+        }
+        assert_eq!(profile.installed_quants(&dir), vec![Quant::Q4]);
+
+        // Truncating one shared file uninstalls the quant.
+        let vae = &tasks[1].destination;
+        std::fs::File::create(vae).unwrap().set_len(1).unwrap();
+        assert!(profile.installed_quants(&dir).is_empty());
+
+        std::fs::remove_dir_all(&dir).expect("cleanup");
     }
 
     #[test]

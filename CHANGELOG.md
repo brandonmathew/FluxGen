@@ -36,6 +36,14 @@ Semantic Versioning.
   the bundled engine version. The portable download is now a
   zip containing the application and the engine folder; the
   previous bare executable download is replaced by it.
+- Model downloads on the Models page: each variant card has
+  a quantization selector (auto-pick preselected, override
+  selectable), a Download button with live per-file and
+  overall progress, and cancel support. Downloads resume
+  from partial files, skip files already present at the
+  exact size, and surface failures with their reason. A
+  variant counts as downloaded only when its complete file
+  set is present at the exact listed sizes.
 
 ## [0.1.2] - 2026-11-20
 

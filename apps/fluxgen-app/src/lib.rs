@@ -11,19 +11,33 @@
 //! is the full typed-error message, so the front-end error banner
 //! shows the real reason. Nothing fails silently.
 
+use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 
 use serde::Serialize;
-use tauri::State;
+use tauri::{AppHandle, Emitter, State};
 
 use fluxgen_core::{AppError, DataPaths, Quant, Variant};
 use fluxgen_engine::{EngineConfig, EngineProcess};
-use fluxgen_models::{detect_system, pick_quant, profile_for};
+use fluxgen_models::{detect_system, download_file, pick_quant, profile_for, DownloadTask};
 use fluxgen_store::Store;
 
 /// Fixed loopback port for the engine server.
 const ENGINE_PORT: u16 = 8189;
+
+/// One in-flight variant download.
+struct DownloadSlot {
+    /// Set by the cancel command; the runner checks it before
+    /// reporting completion so a cancel is reported exactly once.
+    cancelled: Arc<AtomicBool>,
+    /// Handle of the spawned download task.
+    handle: tokio::task::JoinHandle<()>,
+}
+
+/// Registry of in-flight downloads, keyed by variant id.
+type DownloadRegistry = tokio::sync::Mutex<HashMap<String, DownloadSlot>>;
 
 /// Application state shared by commands.
 pub struct AppState {
@@ -33,6 +47,8 @@ pub struct AppState {
     pub store: Mutex<Store>,
     /// Running engine process, when started.
     pub engine: tokio::sync::Mutex<Option<EngineProcess>>,
+    /// In-flight variant downloads.
+    pub downloads: Arc<DownloadRegistry>,
 }
 
 fn err_string(e: AppError) -> String {
@@ -132,6 +148,40 @@ pub struct EngineInfoDto {
     pub binary_path: String,
 }
 
+/// Progress of one variant download, emitted as a
+/// `download-progress` event.
+#[derive(Serialize, Clone)]
+pub struct DownloadProgressDto {
+    /// Variant being downloaded.
+    pub variant_id: String,
+    /// File currently transferring (leaf file name).
+    pub file_name: String,
+    /// 1-based index of the current file.
+    pub file_index: usize,
+    /// Total number of files in this download.
+    pub files_total: usize,
+    /// Bytes transferred for the current file.
+    pub file_downloaded_bytes: u64,
+    /// Expected size of the current file.
+    pub file_total_bytes: u64,
+    /// Bytes transferred across all files so far.
+    pub overall_downloaded_bytes: u64,
+    /// Expected size of the whole download.
+    pub overall_total_bytes: u64,
+}
+
+/// Outcome of a variant download, emitted as a
+/// `download-finished` event.
+#[derive(Serialize, Clone)]
+pub struct DownloadFinishedDto {
+    /// Variant that was downloaded.
+    pub variant_id: String,
+    /// Whether every file downloaded and verified.
+    pub ok: bool,
+    /// The failure or cancellation reason, when not `ok`.
+    pub error: Option<String>,
+}
+
 /// The newest crash report, when one exists.
 #[derive(Serialize)]
 pub struct CrashReportDto {
@@ -181,9 +231,7 @@ fn list_variants(state: State<'_, AppState>) -> Result<Vec<VariantDto>, String> 
     for variant in Variant::ALL {
         let profile = profile_for(variant);
         let dir = state.paths.variant_models_dir(variant);
-        let installed = std::fs::read_dir(&dir)
-            .map(|mut entries| entries.next().is_some())
-            .unwrap_or(false);
+        let installed = !profile.installed_quants(&dir).is_empty();
         let quants = profile
             .quant_options
             .iter()
@@ -221,6 +269,180 @@ fn get_quant_recommendation(
         model_size_bytes: choice.model_size_bytes,
         reasons: choice.reasons,
     })
+}
+
+/// Run one variant download to completion, emitting progress
+/// events as bytes land. Files already on disk at the exact
+/// listed size are skipped by the caller.
+async fn run_variant_download(
+    app: AppHandle,
+    variant_id: String,
+    tasks: Vec<DownloadTask>,
+) -> Result<(), String> {
+    let files_total = tasks.len();
+    let overall_total_bytes: u64 = tasks.iter().map(|t| t.expected_size_bytes).sum();
+    let mut completed_bytes: u64 = 0;
+    for (index, task) in tasks.iter().enumerate() {
+        if let Some(parent) = task.destination.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        }
+        let file_name = task
+            .destination
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| task.url.clone());
+        let file_total_bytes = task.expected_size_bytes;
+        let base_bytes = completed_bytes;
+        let progress_app = app.clone();
+        let progress_variant = variant_id.clone();
+        let mut last_percent: u64 = u64::MAX;
+        download_file(task, move |written, _total| {
+            let overall = base_bytes + written;
+            let percent = if overall_total_bytes > 0 {
+                overall * 100 / overall_total_bytes
+            } else {
+                100
+            };
+            if percent == last_percent {
+                return;
+            }
+            last_percent = percent;
+            let _ = progress_app.emit(
+                "download-progress",
+                DownloadProgressDto {
+                    variant_id: progress_variant.clone(),
+                    file_name: file_name.clone(),
+                    file_index: index + 1,
+                    files_total,
+                    file_downloaded_bytes: written,
+                    file_total_bytes,
+                    overall_downloaded_bytes: overall,
+                    overall_total_bytes,
+                },
+            );
+        })
+        .await
+        .map_err(err_string)?;
+        completed_bytes += file_total_bytes;
+    }
+    Ok(())
+}
+
+/// Start downloading a variant's files in the background.
+/// `quant_label` selects the quantization by its publisher
+/// label; when omitted, the quantization is auto-picked from
+/// the detected system specifications. Progress arrives as
+/// `download-progress` events and the outcome as a single
+/// `download-finished` event.
+#[tauri::command]
+async fn start_variant_download(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    variant_id: String,
+    quant_label: Option<String>,
+) -> Result<(), String> {
+    let variant = Variant::from_id(&variant_id)
+        .ok_or_else(|| format!("unknown variant id: {variant_id}"))?;
+    let profile = profile_for(variant);
+    let quant = match &quant_label {
+        Some(label) => profile
+            .quant_options
+            .iter()
+            .find(|o| o.label == label.as_str())
+            .map(|o| o.quant)
+            .ok_or_else(|| {
+                format!(
+                    "variant {} has no quantization labelled {label}",
+                    variant.display_name()
+                )
+            })?,
+        None => {
+            let specs = detect_system(&state.paths.root).map_err(err_string)?;
+            pick_quant(variant, &specs, 1024, 1024)
+                .map_err(err_string)?
+                .quant
+        }
+    };
+    let dir = state.paths.variant_models_dir(variant);
+    let tasks = profile
+        .download_tasks(quant, &dir)
+        .ok_or_else(|| "quantization is not published for this variant".to_string())?;
+    let pending: Vec<DownloadTask> = tasks
+        .into_iter()
+        .filter(|t| fluxgen_models::download::verify_file(t, &t.destination).is_err())
+        .collect();
+
+    let registry = state.downloads.clone();
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let runner_cancelled = cancelled.clone();
+    let runner_app = app.clone();
+    let runner_variant = variant_id.clone();
+    let handle = tokio::spawn(async move {
+        let result = run_variant_download(runner_app.clone(), runner_variant.clone(), pending).await;
+        // Unregister, but only our own slot: a cancel removes
+        // the slot itself, and a newer download for the same
+        // variant must not be disturbed.
+        let mut map = registry.lock().await;
+        let ours = map
+            .get(&runner_variant)
+            .map(|slot| Arc::ptr_eq(&slot.cancelled, &runner_cancelled))
+            .unwrap_or(false);
+        if ours {
+            map.remove(&runner_variant);
+        }
+        drop(map);
+        if !runner_cancelled.load(Ordering::SeqCst) {
+            let _ = runner_app.emit(
+                "download-finished",
+                DownloadFinishedDto {
+                    variant_id: runner_variant,
+                    ok: result.is_ok(),
+                    error: result.err(),
+                },
+            );
+        }
+    });
+
+    let mut map = state.downloads.lock().await;
+    if map.contains_key(&variant_id) {
+        handle.abort();
+        return Err(format!(
+            "a download for {} is already running",
+            variant.display_name()
+        ));
+    }
+    map.insert(variant_id, DownloadSlot { cancelled, handle });
+    Ok(())
+}
+
+/// Cancel a running variant download. Partial files stay on
+/// disk and resume on the next download.
+#[tauri::command]
+async fn cancel_variant_download(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    variant_id: String,
+) -> Result<(), String> {
+    let slot = state.downloads.lock().await.remove(&variant_id);
+    match slot {
+        Some(slot) => {
+            slot.cancelled.store(true, Ordering::SeqCst);
+            slot.handle.abort();
+            let _ = app.emit(
+                "download-finished",
+                DownloadFinishedDto {
+                    variant_id,
+                    ok: false,
+                    error: Some(
+                        "Download cancelled. Partial files are kept and resume on the next download."
+                            .to_string(),
+                    ),
+                },
+            );
+            Ok(())
+        }
+        None => Err("no download is running for this variant".to_string()),
+    }
 }
 
 /// Resolve the engine launch configuration for a variant at a
@@ -541,6 +763,7 @@ pub fn run() {
         paths,
         store: Mutex::new(store),
         engine: tokio::sync::Mutex::new(None),
+        downloads: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
     };
 
     tauri::Builder::default()
@@ -550,6 +773,8 @@ pub fn run() {
             get_system_info,
             get_engine_info,
             list_variants,
+            start_variant_download,
+            cancel_variant_download,
             get_quant_recommendation,
             engine_start,
             engine_stop,
