@@ -79,17 +79,20 @@ impl VariantProfile {
 // Chroma1-HD (silveroxides/Chroma1-HD-GGUF, QuantStack/Chroma1-HD-GGUF)
 // ---------------------------------------------------------------------------
 
+// The shared files do not live in the GGUF repository (Issue #11):
+// the T5 encoder is the standard FLUX text-encoder file, and the VAE
+// comes from the variant's original Diffusers repository.
 const CHROMA_SHARED: &[ModelFile] = &[
     ModelFile {
-        repo: "silveroxides/Chroma1-HD-GGUF",
+        repo: "comfyanonymous/flux_text_encoders",
         file_name: "t5xxl_fp8_e4m3fn.safetensors",
-        size_bytes: 4_900_000_000,
+        size_bytes: 4_893_934_904,
         role: FileRole::TextEncoder,
     },
     ModelFile {
-        repo: "silveroxides/Chroma1-HD-GGUF",
-        file_name: "ae.safetensors",
-        size_bytes: 340_000_000,
+        repo: "lodestones/Chroma1-HD",
+        file_name: "vae/diffusion_pytorch_model.safetensors",
+        size_bytes: 167_666_902,
         role: FileRole::Vae,
     },
 ];
@@ -99,31 +102,31 @@ const CHROMA_QUANTS: &[QuantOption] = &[
         quant: Quant::Q4,
         label: "Q4_K_M",
         file_name: "Chroma1-HD-Q4_K_M.gguf",
-        size_bytes: 5_570_000_000,
+        size_bytes: 5_566_533_792,
     },
     QuantOption {
         quant: Quant::Q5,
         label: "Q5_K_M",
         file_name: "Chroma1-HD-Q5_K_M.gguf",
-        size_bytes: 6_650_000_000,
+        size_bytes: 6_650_777_760,
     },
     QuantOption {
         quant: Quant::Q6,
         label: "Q6_K",
         file_name: "Chroma1-HD-Q6_K.gguf",
-        size_bytes: 7_650_000_000,
+        size_bytes: 7_650_971_808,
     },
     QuantOption {
         quant: Quant::Q8,
         label: "Q8_0",
         file_name: "Chroma1-HD-Q8_0.gguf",
-        size_bytes: 9_740_000_000,
+        size_bytes: 9_735_409_824,
     },
     QuantOption {
         quant: Quant::Bf16,
         label: "BF16",
         file_name: "Chroma1-HD-BF16.gguf",
-        size_bytes: 17_800_000_000,
+        size_bytes: 17_804_202_144,
     },
 ];
 
@@ -132,29 +135,32 @@ const CHROMA_QUANTS: &[QuantOption] = &[
 // (enhanceaiteam/Flux-Uncensored-V2)
 // ---------------------------------------------------------------------------
 
+// CLIP-L and the VAE do not live in the GGUF repositories
+// (Issue #11): CLIP-L is the standard FLUX text-encoder file and
+// the VAE is the FLUX.1 autoencoder in BF16.
 const FLUX1_SHARED: &[ModelFile] = &[
     ModelFile {
         repo: "city96/t5-v1_1-xxl-encoder-gguf",
         file_name: "t5-v1_1-xxl-encoder-Q5_K_M.gguf",
-        size_bytes: 3_400_000_000,
+        size_bytes: 3_386_856_640,
         role: FileRole::TextEncoder,
     },
     ModelFile {
-        repo: "city96/t5-v1_1-xxl-encoder-gguf",
+        repo: "comfyanonymous/flux_text_encoders",
         file_name: "clip_l.safetensors",
-        size_bytes: 240_000_000,
+        size_bytes: 246_144_152,
         role: FileRole::TextEncoder,
     },
     ModelFile {
-        repo: "city96/FLUX.1-dev-gguf",
-        file_name: "ae.safetensors",
-        size_bytes: 340_000_000,
+        repo: "Kijai/flux-fp8",
+        file_name: "flux-vae-bf16.safetensors",
+        size_bytes: 167_664_710,
         role: FileRole::Vae,
     },
     ModelFile {
         repo: "enhanceaiteam/Flux-Uncensored-V2",
         file_name: "lora.safetensors",
-        size_bytes: 687_000_000,
+        size_bytes: 687_476_088,
         role: FileRole::BundledLora,
     },
 ];
@@ -164,50 +170,57 @@ const FLUX1_QUANTS: &[QuantOption] = &[
         quant: Quant::Q4,
         label: "Q4_K_S",
         file_name: "flux1-dev-Q4_K_S.gguf",
-        size_bytes: 6_800_000_000,
+        size_bytes: 6_805_988_640,
     },
     QuantOption {
         quant: Quant::Q5,
         label: "Q5_K_S",
         file_name: "flux1-dev-Q5_K_S.gguf",
-        size_bytes: 8_300_000_000,
+        size_bytes: 8_285_267_232,
     },
     QuantOption {
         quant: Quant::Q6,
         label: "Q6_K",
         file_name: "flux1-dev-Q6_K.gguf",
-        size_bytes: 9_900_000_000,
+        size_bytes: 9_857_000_736,
     },
     QuantOption {
         quant: Quant::Q8,
         label: "Q8_0",
         file_name: "flux1-dev-Q8_0.gguf",
-        size_bytes: 12_700_000_000,
+        size_bytes: 12_708_281_504,
     },
     QuantOption {
         quant: Quant::Bf16,
         label: "FP16",
         file_name: "flux1-dev-F16.gguf",
-        size_bytes: 23_800_000_000,
+        size_bytes: 23_802_870_944,
     },
 ];
 
 // ---------------------------------------------------------------------------
 // FLUX.2 Klein 4B (unsloth/FLUX.2-klein-4B-GGUF) + abliterated Qwen3-4B
-// text encoder (ponpoke/flux2-klein-4b-uncensored-text-encoder)
+// text encoder + FLUX.2 VAE (black-forest-labs/FLUX.2-klein-4B).
+//
+// The encoder's original repository
+// (ponpoke/flux2-klein-4b-uncensored-text-encoder) is gated: anonymous
+// downloads return HTTP 401, and FluxGen downloads anonymously. The
+// mirror below serves the identical file anonymously; its SHA-256
+// (97dac4e931ffb1fed023c564aa2d73b1de82795612548369810478c2d69a3e49)
+// matches the original repository's listing exactly (Issue #11).
 // ---------------------------------------------------------------------------
 
 const KLEIN_SHARED: &[ModelFile] = &[
     ModelFile {
-        repo: "ponpoke/flux2-klein-4b-uncensored-text-encoder",
-        file_name: "qwen3-4b-abl-q4_k_m.gguf",
-        size_bytes: 2_500_000_000,
+        repo: "nerualdreming/flux2-klein-4b-uncensored-text-encoder",
+        file_name: "flux2-klein-4b-uncensored-q4_k_m.gguf",
+        size_bytes: 2_497_280_416,
         role: FileRole::TextEncoder,
     },
     ModelFile {
-        repo: "unsloth/FLUX.2-klein-4B-GGUF",
-        file_name: "ae.safetensors",
-        size_bytes: 340_000_000,
+        repo: "black-forest-labs/FLUX.2-klein-4B",
+        file_name: "vae/diffusion_pytorch_model.safetensors",
+        size_bytes: 168_120_878,
         role: FileRole::Vae,
     },
 ];
@@ -217,13 +230,13 @@ const KLEIN_QUANTS: &[QuantOption] = &[
         quant: Quant::Q4,
         label: "Q4_K_M",
         file_name: "flux-2-klein-4b-Q4_K_M.gguf",
-        size_bytes: 2_600_000_000,
+        size_bytes: 2_604_311_104,
     },
     QuantOption {
         quant: Quant::Q8,
         label: "Q8_0",
         file_name: "flux-2-klein-4b-Q8_0.gguf",
-        size_bytes: 5_200_000_000,
+        size_bytes: 4_300_644_928,
     },
 ];
 
@@ -276,8 +289,8 @@ mod tests {
     #[test]
     fn chroma_q6_total_matches_component_sizes() {
         let p = profile_for(Variant::ChromaHd);
-        // 7.65 GB model + 4.90 GB T5 FP8 + 0.34 GB VAE.
-        assert_eq!(p.total_size_bytes(Quant::Q6), Some(12_890_000_000));
+        // 7,650,971,808 model + 4,893,934,904 T5 FP8 + 167,666,902 VAE.
+        assert_eq!(p.total_size_bytes(Quant::Q6), Some(12_712_573_614));
     }
 
     #[test]
@@ -286,7 +299,7 @@ mod tests {
         assert!(p
             .shared_files
             .iter()
-            .any(|f| f.role == FileRole::BundledLora && f.size_bytes == 687_000_000));
+            .any(|f| f.role == FileRole::BundledLora && f.size_bytes == 687_476_088));
     }
 
     #[test]
