@@ -1,0 +1,49 @@
+# Build artifacts
+target/
+**/target/
+*.pdb
+
+# Portable runtime data (never committed)
+models/
+loras/
+outputs/
+presets/
+crashes/
+data/
+
+# Model and image weight files
+*.gguf
+*.safetensors
+*.ckpt
+*.bin
+*.onnx
+
+# Engine binaries
+engine/
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Secrets and local configuration
+*.key
+*.pem
+.env
+.env.*
+settings.local.json
+tauri-updater-private-key*
+
+# Editor and OS files
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Logs
+*.log
+
+# Internal planning documents (not part of the public repository)
+docs/SPEC.md
