@@ -353,6 +353,7 @@ mod tests {
         }
         let store = Store::open(&db_path).expect("reopen");
         assert_eq!(store.list_gallery().expect("list").len(), 1);
+        drop(store);
         std::fs::remove_dir_all(&dir).expect("cleanup");
     }
 }
