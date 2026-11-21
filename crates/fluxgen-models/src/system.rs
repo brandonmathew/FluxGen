@@ -145,7 +145,48 @@ fn fs_free_bytes(path: &Path) -> Result<u64, AppError> {
 }
 
 /// Free bytes on the volume containing `path`.
-#[cfg(not(target_os = "linux"))]
+///
+/// Windows implementation uses `GetDiskFreeSpaceExW` from kernel32
+/// through a minimal FFI declaration kept in this module, matching
+/// the Linux implementation's approach.
+#[cfg(target_os = "windows")]
+fn fs_free_bytes(path: &Path) -> Result<u64, AppError> {
+    use std::os::windows::ffi::OsStrExt;
+    extern "system" {
+        fn GetDiskFreeSpaceExW(
+            directory_name: *const u16,
+            free_bytes_available: *mut u64,
+            total_number_of_bytes: *mut u64,
+            total_number_of_free_bytes: *mut u64,
+        ) -> i32;
+    }
+    let mut existing = path.to_path_buf();
+    while !existing.exists() {
+        if !existing.pop() {
+            break;
+        }
+    }
+    let mut wide: Vec<u16> = existing.as_os_str().encode_wide().collect();
+    wide.push(0);
+    let mut free_available: u64 = 0;
+    let mut total: u64 = 0;
+    let mut total_free: u64 = 0;
+    let rc = unsafe {
+        GetDiskFreeSpaceExW(
+            wide.as_ptr(),
+            &mut free_available,
+            &mut total,
+            &mut total_free,
+        )
+    };
+    if rc == 0 {
+        return Err(AppError::Io(std::io::Error::last_os_error()));
+    }
+    Ok(free_available)
+}
+
+/// Free bytes on the volume containing `path`.
+#[cfg(not(any(target_os = "linux", target_os = "windows")))]
 fn fs_free_bytes(path: &Path) -> Result<u64, AppError> {
     let _ = path;
     Err(AppError::Storage(
@@ -193,7 +234,7 @@ mod tests {
 
     #[test]
     fn free_disk_of_temp_dir_is_positive() {
-        let bytes = free_disk_bytes(&std::env::temp_dir()).expect("statvfs on temp dir");
+        let bytes = free_disk_bytes(&std::env::temp_dir()).expect("free disk on temp dir");
         assert!(bytes > 0);
     }
 }
