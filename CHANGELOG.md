@@ -7,6 +7,8 @@ Semantic Versioning.
 
 ## [Unreleased]
 
+## [0.1.7] - 2026-11-21
+
 ### Fixed
 
 - The front-end script died before startup completed
