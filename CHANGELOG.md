@@ -7,6 +7,21 @@ Semantic Versioning.
 
 ## [Unreleased]
 
+### Fixed
+
+- Portable copies now actually update in place (Issue
+  #18): the in-app updater previously installed every
+  update through the NSIS installer, which installs into
+  its fixed per-user directory and never replaced the
+  portable exe — the portable copy stayed on the old
+  version and kept offering the same update, while the
+  update landed in a separate installed copy with an
+  empty data folder. Portable copies now check a portable
+  update manifest published with each release, download
+  the bare exe with size and SHA-256 verification, swap
+  it in place, and relaunch; installed copies keep using
+  the installer-based updater unchanged.
+
 ## [0.1.8] - 2026-11-21
 
 ### Added

@@ -52,6 +52,13 @@ pub struct AppState {
     /// An application update that has been found and is ready
     /// to install.
     pub pending_update: tokio::sync::Mutex<Option<tauri_plugin_updater::Update>>,
+    /// A portable update found by `check_for_update`, held
+    /// for `install_update`. Portable copies cannot use the
+    /// Tauri updater: on Windows it installs by running the
+    /// NSIS installer, which always installs into its fixed
+    /// per-user directory and never replaces a portable exe
+    /// (Issue #18).
+    pub pending_portable: tokio::sync::Mutex<Option<PortableManifest>>,
     /// Generation queue, in enqueue order. Jobs are session
     /// state; finished outputs persist in the gallery.
     pub jobs: Arc<tokio::sync::Mutex<Vec<fluxgen_core::Job>>>,
@@ -649,6 +656,37 @@ async fn cancel_engine_download(app: AppHandle, state: State<'_, AppState>) -> R
 }
 
 /// Check GitHub Releases for an application update. A found
+/// The portable update manifest published with each
+/// release next to the Tauri updater manifest.
+const PORTABLE_MANIFEST_URL: &str =
+    "https://github.com/brandonmathew/FluxGen/releases/latest/download/portable.json";
+
+/// One release's portable download, from `portable.json`.
+#[derive(Debug, Clone, serde::Deserialize)]
+struct PortableManifest {
+    /// Release version, `X.Y.Z`.
+    version: String,
+    /// URL of the bare portable executable asset.
+    url: String,
+    /// Exact size of the executable in bytes.
+    size_bytes: u64,
+    /// SHA-256 of the executable, lowercase hex.
+    sha256: String,
+}
+
+/// Whether the running copy is the portable distribution.
+/// The NSIS installer places an `uninstall.exe` next to the
+/// installed executable; a portable folder never has one.
+fn is_portable_run() -> bool {
+    match std::env::current_exe() {
+        Ok(exe) => exe
+            .parent()
+            .map(|dir| !dir.join("uninstall.exe").exists())
+            .unwrap_or(true),
+        Err(_) => false,
+    }
+}
+
 /// update is held for `install_update`; nothing is downloaded
 /// or installed by the check itself.
 #[tauri::command]
@@ -656,6 +694,27 @@ async fn check_for_update(
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<Option<UpdateInfoDto>, String> {
+    if is_portable_run() {
+        let manifest: PortableManifest = reqwest::get(PORTABLE_MANIFEST_URL)
+            .await
+            .map_err(|e| format!("update check failed: {e}"))?
+            .error_for_status()
+            .map_err(|e| format!("update check failed: {e}"))?
+            .json()
+            .await
+            .map_err(|e| format!("update check failed: {e}"))?;
+        let current = app.package_info().version.to_string();
+        if fluxgen_core::version_is_newer(&manifest.version, &current) {
+            let info = UpdateInfoDto {
+                version: manifest.version.clone(),
+                notes: None,
+            };
+            *state.pending_portable.lock().await = Some(manifest);
+            return Ok(Some(info));
+        }
+        *state.pending_portable.lock().await = None;
+        return Ok(None);
+    }
     use tauri_plugin_updater::UpdaterExt;
     let updater = app.updater().map_err(|e| e.to_string())?;
     let found = updater.check().await.map_err(|e| e.to_string())?;
@@ -674,6 +733,11 @@ async fn check_for_update(
 /// replaced.
 #[tauri::command]
 async fn install_update(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
+    if let Some(manifest) = state.pending_portable.lock().await.take() {
+        install_portable_update(&app, &manifest).await?;
+        app.exit(0);
+        return Ok(());
+    }
     let update = state
         .pending_update
         .lock()
@@ -698,6 +762,64 @@ async fn install_update(app: AppHandle, state: State<'_, AppState>) -> Result<()
         .await
         .map_err(|e| e.to_string())?;
     app.exit(0);
+    Ok(())
+}
+
+/// Download a portable update and swap it in place of the
+/// running executable. The download is verified against the
+/// manifest's exact size and SHA-256 by the download
+/// manager before anything is swapped. The running exe is
+/// renamed aside (Windows allows renaming a running exe,
+/// not overwriting it), the new exe takes its place, and
+/// the new copy is launched; the caller then exits. The old
+/// file is removed on the next start. Any failure before
+/// the swap completes rolls back to the original exe.
+async fn install_portable_update(
+    app: &AppHandle,
+    manifest: &PortableManifest,
+) -> Result<(), String> {
+    let exe =
+        std::env::current_exe().map_err(|e| format!("could not locate the running exe: {e}"))?;
+    let dir = exe
+        .parent()
+        .ok_or_else(|| "the running exe has no parent folder".to_string())?
+        .to_path_buf();
+    let staging = dir.join("FluxGen-update.exe");
+    let progress_app = app.clone();
+    let task = fluxgen_models::DownloadTask {
+        url: manifest.url.clone(),
+        destination: staging.clone(),
+        expected_size_bytes: manifest.size_bytes,
+        expected_sha256: Some(manifest.sha256.clone()),
+    };
+    fluxgen_models::download_file(&task, move |downloaded, _total| {
+        let _ = progress_app.emit(
+            "update-progress",
+            UpdateProgressDto {
+                downloaded_bytes: downloaded,
+            },
+        );
+    })
+    .await
+    .map_err(err_string)?;
+
+    let backup = dir.join("FluxGen.exe.old");
+    if backup.exists() {
+        let _ = std::fs::remove_file(&backup);
+    }
+    std::fs::rename(&exe, &backup).map_err(|e| {
+        let _ = std::fs::remove_file(&staging);
+        format!("could not move the current exe aside: {e}")
+    })?;
+    if let Err(e) = std::fs::rename(&staging, &exe) {
+        let _ = std::fs::rename(&backup, &exe);
+        return Err(format!("could not put the new exe in place: {e}"));
+    }
+    if let Err(e) = std::process::Command::new(&exe).spawn() {
+        let _ = std::fs::remove_file(&exe);
+        let _ = std::fs::rename(&backup, &exe);
+        return Err(format!("could not launch the updated exe: {e}"));
+    }
     Ok(())
 }
 
@@ -1604,6 +1726,15 @@ pub fn run() {
     }
     install_crash_hook(&paths);
 
+    // Remove the previous executable left behind by a
+    // portable self-update (Issue #18). Best effort: if it
+    // is somehow still locked, the next start retries.
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            let _ = std::fs::remove_file(dir.join("FluxGen.exe.old"));
+        }
+    }
+
     let store = match Store::open(&paths.database) {
         Ok(store) => store,
         Err(e) => {
@@ -1618,6 +1749,7 @@ pub fn run() {
         engine: Arc::new(tokio::sync::Mutex::new(None)),
         downloads: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
         pending_update: tokio::sync::Mutex::new(None),
+        pending_portable: tokio::sync::Mutex::new(None),
         jobs: Arc::new(tokio::sync::Mutex::new(Vec::new())),
         next_job_id: Arc::new(std::sync::atomic::AtomicU64::new(1)),
         queue_notify: Arc::new(tokio::sync::Notify::new()),

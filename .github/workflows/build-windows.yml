@@ -60,6 +60,20 @@ jobs:
             }
           }
           $manifest | ConvertTo-Json -Depth 5 | Set-Content "dist/latest.json" -Encoding utf8
+          # Portable update manifest: portable copies cannot
+          # use the Tauri updater (it installs the NSIS
+          # installer into its fixed directory instead of
+          # replacing the portable exe), so the app checks
+          # this file and swaps the bare exe itself, verified
+          # against the exact size and SHA-256 recorded here.
+          $portableExe = Get-Item "dist/FluxGen.exe"
+          $portableManifest = [ordered]@{
+            version = $version
+            url = "https://github.com/brandonmathew/FluxGen/releases/download/v$version/FluxGen.exe"
+            size_bytes = $portableExe.Length
+            sha256 = (Get-FileHash $portableExe.FullName -Algorithm SHA256).Hash.ToLower()
+          }
+          $portableManifest | ConvertTo-Json | Set-Content "dist/portable.json" -Encoding utf8
           Get-ChildItem dist | Format-Table Name, Length
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
