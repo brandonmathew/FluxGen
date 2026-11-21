@@ -764,10 +764,8 @@ fn engine_config_for(
     {
         let src = dir.join(file.file_name);
         let dst = loras_dir.join(file.file_name);
-        if src.is_file() && !dst.exists() {
-            if std::fs::hard_link(&src, &dst).is_err() {
-                let _ = std::fs::copy(&src, &dst);
-            }
+        if src.is_file() && !dst.exists() && std::fs::hard_link(&src, &dst).is_err() {
+            let _ = std::fs::copy(&src, &dst);
         }
     }
     let binary_path = engine_binary_path(paths);
