@@ -179,6 +179,7 @@
       <div class="panel settings-panel">
         <h2>System</h2>
         <dl class="sysinfo" id="sysinfo">
+          <dt>Version</dt><dd id="sys-version">—</dd>
           <dt>GPU</dt><dd id="sys-gpu">Detecting…</dd>
           <dt>VRAM</dt><dd id="sys-vram">—</dd>
           <dt>RAM</dt><dd id="sys-ram">—</dd>
@@ -189,6 +190,11 @@
       <div class="panel settings-panel">
         <h2>Updates</h2>
         <p class="page-note">FluxGen checks GitHub Releases for updates. An update is installed only after approval. Update artifacts are signed and verified.</p>
+      </div>
+      <div class="panel settings-panel">
+        <h2>Session errors</h2>
+        <p class="page-note" id="session-errors-empty">No errors this session.</p>
+        <ul class="error-history" id="session-errors"></ul>
       </div>
     </section>
   </main>

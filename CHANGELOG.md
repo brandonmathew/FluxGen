@@ -7,6 +7,22 @@ Semantic Versioning.
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-11-20
+
+### Fixed
+
+- Error banner visibility: an explicit `[hidden]` CSS rule now
+  guarantees hidden elements stay hidden. The banner's
+  `display: flex` rule previously overrode the `hidden` attribute
+  in Chromium/WebView2, so the banner frame could render with no
+  current error, including after dismissal.
+- Error messages are self-identifying: the banner and the new
+  Session errors list on the Settings page record which command
+  produced each error, with the time. Empty error values are
+  replaced with an explicit unknown-error message instead of
+  rendering a blank banner.
+- Settings page shows the application version in the System panel.
+
 ## [0.1.1] - 2026-11-20
 
 ### Fixed

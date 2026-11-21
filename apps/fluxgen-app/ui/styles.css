@@ -3,6 +3,14 @@
    dark mode; warm paper surfaces with a bronze accent in light
    mode. All colors flow through the variables below. */
 
+/* The hidden attribute must always win. Chromium lets an author
+   display rule (for example display: flex on the error banner)
+   override the hidden attribute, which made hidden elements
+   render. This rule removes that failure mode for every element. */
+[hidden] {
+  display: none !important;
+}
+
 :root,
 html[data-theme="dark"] {
   --bg: #0e1216;
@@ -240,6 +248,17 @@ code {
 
 .error-banner button {
   flex: none;
+}
+
+.error-history {
+  margin: 0;
+  padding-left: 18px;
+  color: var(--text);
+}
+
+.error-history li {
+  margin: 4px 0;
+  word-break: break-word;
 }
 
 /* Generate page ----------------------------------------------------- */

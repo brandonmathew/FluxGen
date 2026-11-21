@@ -11,6 +11,7 @@ const state = {
   queue: [],
   nextJobId: 1,
   crashReport: null,
+  errors: [],
 };
 
 // ---------------------------------------------------------------------------
@@ -20,9 +21,36 @@ const state = {
 const banner = document.getElementById("error-banner");
 const bannerText = document.getElementById("error-banner-text");
 
-function showError(message) {
-  bannerText.textContent = String(message);
+function showError(message, source) {
+  let text =
+    message === null || message === undefined ? "" : String(message).trim();
+  if (!text) text = "Unknown error (no message was provided)";
+  const entry = {
+    at: new Date(),
+    source: source || "interface",
+    text,
+  };
+  state.errors.push(entry);
+  renderSessionErrors();
+  bannerText.textContent = entry.source + ": " + entry.text;
   banner.hidden = false;
+}
+
+function renderSessionErrors() {
+  const list = document.getElementById("session-errors");
+  const empty = document.getElementById("session-errors-empty");
+  if (!list) return;
+  list.textContent = "";
+  if (empty) empty.hidden = state.errors.length > 0;
+  for (const entry of state.errors) {
+    list.appendChild(
+      el(
+        "li",
+        null,
+        entry.at.toLocaleTimeString() + " · " + entry.source + ": " + entry.text
+      )
+    );
+  }
 }
 
 function clearError() {
@@ -35,7 +63,7 @@ document.getElementById("error-copy").addEventListener("click", async () => {
   try {
     await navigator.clipboard.writeText(bannerText.textContent);
   } catch (e) {
-    showError("Copy failed: " + e);
+    showError("Copy failed: " + e, "clipboard");
   }
 });
 
@@ -45,7 +73,7 @@ async function call(command, args) {
   try {
     return await invoke(command, args);
   } catch (e) {
-    showError(e);
+    showError(e, command);
     return undefined;
   }
 }
@@ -130,7 +158,7 @@ document.getElementById("crash-copy").addEventListener("click", async () => {
   try {
     await navigator.clipboard.writeText(state.crashReport.contents);
   } catch (e) {
-    showError("Copy failed: " + e);
+    showError("Copy failed: " + e, "clipboard");
   }
 });
 
@@ -154,6 +182,12 @@ document.getElementById("crash-continue").addEventListener("click", () => {
 // ---------------------------------------------------------------------------
 
 async function loadSystemInfo() {
+  try {
+    document.getElementById("sys-version").textContent =
+      await window.__TAURI__.app.getVersion();
+  } catch (e) {
+    document.getElementById("sys-version").textContent = "—";
+  }
   const info = await call("get_system_info");
   if (!info) return;
   document.getElementById("sys-gpu").textContent = info.gpu_name || "Not detected";
