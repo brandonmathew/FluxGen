@@ -40,7 +40,7 @@ impl EngineConfig {
             "127.0.0.1".to_string(),
             "--listen-port".to_string(),
             self.port.to_string(),
-            "--model".to_string(),
+            "--diffusion-model".to_string(),
             self.model_path.to_string_lossy().into_owned(),
             "--vae".to_string(),
             self.vae_path.to_string_lossy().into_owned(),
@@ -92,7 +92,10 @@ mod tests {
             "{joined}"
         );
         assert!(joined.contains("--listen-port 1234"), "{joined}");
-        assert!(joined.contains("--model /models/model.gguf"), "{joined}");
+        assert!(
+            joined.contains("--diffusion-model /models/model.gguf"),
+            "{joined}"
+        );
     }
 
     #[test]
