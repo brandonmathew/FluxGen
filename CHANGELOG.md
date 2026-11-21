@@ -28,6 +28,14 @@ Semantic Versioning.
   (environment-gated): missing-model error surfacing, model
   load, an HTTP generation request, and clean shutdown,
   verified with FLUX.2 Klein 4B on CPU.
+- Bundled engine: the Windows package now includes the
+  stable-diffusion.cpp master-1106-532d2c1 CUDA build
+  (sd-server and its libraries, 21 files, ~1.3 GB) in an
+  `engine` folder next to the application, in both the NSIS
+  installer and the new portable zip. The Models page shows
+  the bundled engine version. The portable download is now a
+  zip containing the application and the engine folder; the
+  previous bare executable download is replaced by it.
 
 ## [0.1.2] - 2026-11-20
 

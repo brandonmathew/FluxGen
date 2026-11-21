@@ -203,6 +203,12 @@ async function loadSystemInfo() {
 // ---------------------------------------------------------------------------
 
 async function loadVariants() {
+  const engineInfo = await call("get_engine_info");
+  if (engineInfo) {
+    document.getElementById("engine-info").textContent = engineInfo.bundled
+      ? "Engine: " + engineInfo.version + " (bundled)"
+      : "Engine: " + engineInfo.version + " — binary not found at " + engineInfo.binary_path;
+  }
   const variants = await call("list_variants");
   if (!variants) return;
   state.variants = variants;

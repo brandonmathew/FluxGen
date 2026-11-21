@@ -27,6 +27,9 @@ pub struct DataPaths {
     pub presets: PathBuf,
     /// Crash report text files, newest kept for review at launch.
     pub crashes: PathBuf,
+    /// Bundled engine binaries (`sd-server` and its libraries),
+    /// shipped with the application.
+    pub engine: PathBuf,
     /// SQLite database file for gallery, presets, and LoRA library.
     pub database: PathBuf,
 }
@@ -40,6 +43,7 @@ impl DataPaths {
             outputs: root.join("outputs"),
             presets: root.join("presets"),
             crashes: root.join("crashes"),
+            engine: root.join("engine"),
             database: root.join("fluxgen.db"),
             root,
         }
@@ -71,6 +75,7 @@ impl DataPaths {
             &self.outputs,
             &self.presets,
             &self.crashes,
+            &self.engine,
         ] {
             std::fs::create_dir_all(dir)?;
         }
@@ -94,6 +99,7 @@ mod tests {
         assert_eq!(paths.loras, PathBuf::from("/data/fluxgen/loras"));
         assert_eq!(paths.outputs, PathBuf::from("/data/fluxgen/outputs"));
         assert_eq!(paths.crashes, PathBuf::from("/data/fluxgen/crashes"));
+        assert_eq!(paths.engine, PathBuf::from("/data/fluxgen/engine"));
         assert_eq!(paths.database, PathBuf::from("/data/fluxgen/fluxgen.db"));
     }
 
@@ -117,6 +123,7 @@ mod tests {
             &paths.outputs,
             &paths.presets,
             &paths.crashes,
+            &paths.engine,
         ] {
             assert!(dir.is_dir(), "missing {}", dir.display());
         }

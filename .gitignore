@@ -20,6 +20,7 @@ data/
 
 # Engine binaries
 engine/
+apps/fluxgen-app/engine-bundle/
 *.exe
 *.dll
 *.so

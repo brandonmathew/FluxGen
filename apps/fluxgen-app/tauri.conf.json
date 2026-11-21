@@ -30,6 +30,9 @@
       "icons/icon.ico"
     ],
     "longDescription": "FluxGen runs text-to-image and image-to-image generation locally through a bundled stable-diffusion.cpp server, with managed model downloads, LoRA support, presets, and a portable data folder.",
+    "resources": {
+      "engine-bundle": "engine"
+    },
     "shortDescription": "Local image generation with GGUF Flux variants",
     "targets": [
       "nsis"

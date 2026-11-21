@@ -121,6 +121,17 @@ pub struct GalleryDto {
     pub settings_json: String,
 }
 
+/// Bundled engine identity and presence.
+#[derive(Serialize)]
+pub struct EngineInfoDto {
+    /// Bundled engine release string.
+    pub version: String,
+    /// Whether the engine binary is present in the engine folder.
+    pub bundled: bool,
+    /// Full path the engine binary is expected at.
+    pub binary_path: String,
+}
+
 /// The newest crash report, when one exists.
 #[derive(Serialize)]
 pub struct CrashReportDto {
@@ -144,6 +155,22 @@ fn get_system_info(state: State<'_, AppState>) -> Result<SystemInfoDto, String> 
         ram_bytes: specs.ram_bytes,
         free_disk_bytes: specs.free_disk_bytes,
         data_root: state.paths.root.to_string_lossy().into_owned(),
+    })
+}
+
+/// Bundled engine version and whether the binary is in place.
+#[tauri::command]
+fn get_engine_info(state: State<'_, AppState>) -> Result<EngineInfoDto, String> {
+    let binary_name = if cfg!(windows) {
+        "sd-server.exe"
+    } else {
+        "sd-server"
+    };
+    let binary_path = state.paths.engine.join(binary_name);
+    Ok(EngineInfoDto {
+        version: fluxgen_engine::ENGINE_VERSION.to_string(),
+        bundled: binary_path.is_file(),
+        binary_path: binary_path.to_string_lossy().into_owned(),
     })
 }
 
@@ -251,7 +278,7 @@ fn engine_config_for(
     } else {
         "sd-server"
     };
-    let binary_path = paths.root.join("engine").join(binary_name);
+    let binary_path = paths.engine.join(binary_name);
     Ok(EngineConfig {
         binary_path,
         port: ENGINE_PORT,
@@ -521,6 +548,7 @@ pub fn run() {
         .manage(state)
         .invoke_handler(tauri::generate_handler![
             get_system_info,
+            get_engine_info,
             list_variants,
             get_quant_recommendation,
             engine_start,
