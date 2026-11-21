@@ -62,8 +62,9 @@ pub struct AppState {
     /// Variant and quantization the engine is loaded with,
     /// when the app started it.
     pub loaded_engine: Arc<tokio::sync::Mutex<Option<(Variant, Quant)>>>,
-    /// Handle of the currently executing job, for cancel.
-    pub running_job: Arc<tokio::sync::Mutex<Option<tokio::task::JoinHandle<()>>>>,
+    /// Abort handle of the currently executing job, for
+    /// cancel.
+    pub running_job: Arc<tokio::sync::Mutex<Option<tokio::task::AbortHandle>>>,
 }
 
 fn err_string(e: AppError) -> String {
