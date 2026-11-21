@@ -7,6 +7,8 @@ Semantic Versioning.
 
 ## [Unreleased]
 
+## [0.1.6] - 2026-11-21
+
 ### Added
 
 - Generation pipeline (Issue #15): queued jobs run against
