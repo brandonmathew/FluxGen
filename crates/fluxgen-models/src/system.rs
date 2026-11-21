@@ -2,9 +2,9 @@
 //!
 //! Detection sits behind a plain function returning [`SystemSpecs`]
 //! so a platform implementation can be swapped without touching
-//! quantization selection. The current implementation covers Linux
-//! (via `/proc` and `statvfs`-equivalent filesystem metadata);
-//! Windows detection via DXGI/NVML slots into the same function.
+//! quantization selection. Linux reads `/proc` and DRM sysfs and
+//! uses `statvfs`; Windows uses `GlobalMemoryStatusEx` for RAM,
+//! DXGI for GPU name and VRAM, and `GetDiskFreeSpaceExW` for disk.
 
 use std::path::Path;
 
@@ -66,7 +66,26 @@ fn total_ram_bytes() -> Result<u64, AppError> {
         .ok_or_else(|| AppError::Storage("MemTotal not found in /proc/meminfo".to_string()))
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(target_os = "windows")]
+fn total_ram_bytes() -> Result<u64, AppError> {
+    use windows::Win32::System::SystemInformation::{GlobalMemoryStatusEx, MEMORYSTATUSEX};
+    let mut status = MEMORYSTATUSEX {
+        dwLength: std::mem::size_of::<MEMORYSTATUSEX>() as u32,
+        dwMemoryLoad: 0,
+        ullTotalPhys: 0,
+        ullAvailPhys: 0,
+        ullTotalPageFile: 0,
+        ullAvailPageFile: 0,
+        ullTotalVirtual: 0,
+        ullAvailVirtual: 0,
+        ullAvailExtendedVirtual: 0,
+    };
+    unsafe { GlobalMemoryStatusEx(&mut status) }
+        .map_err(|e| AppError::Storage(format!("GlobalMemoryStatusEx failed: {e}")))?;
+    Ok(status.ullTotalPhys)
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "windows")))]
 fn total_ram_bytes() -> Result<u64, AppError> {
     Err(AppError::Storage(
         "system RAM detection is not implemented on this platform yet".to_string(),
@@ -197,23 +216,73 @@ fn fs_free_bytes(path: &Path) -> Result<u64, AppError> {
 /// Detect GPU VRAM and name. On Linux this reads the DRM sysfs
 /// entries; when nothing is found the result is `(None, None)` and
 /// callers must not guess.
+#[cfg(target_os = "linux")]
 fn detect_gpu() -> (Option<u64>, Option<String>) {
-    #[cfg(target_os = "linux")]
-    {
-        if let Ok(entries) = std::fs::read_dir("/sys/class/drm") {
-            for entry in entries.flatten() {
-                let dir = entry.path().join("device");
-                if let Ok(text) = std::fs::read_to_string(dir.join("mem_info_vram_total")) {
-                    if let Ok(bytes) = text.trim().parse::<u64>() {
-                        let name = std::fs::read_to_string(dir.join("label"))
-                            .ok()
-                            .map(|s| s.trim().to_string());
-                        return (Some(bytes), name);
-                    }
+    if let Ok(entries) = std::fs::read_dir("/sys/class/drm") {
+        for entry in entries.flatten() {
+            let dir = entry.path().join("device");
+            if let Ok(text) = std::fs::read_to_string(dir.join("mem_info_vram_total")) {
+                if let Ok(bytes) = text.trim().parse::<u64>() {
+                    let name = std::fs::read_to_string(dir.join("label"))
+                        .ok()
+                        .map(|s| s.trim().to_string());
+                    return (Some(bytes), name);
                 }
             }
         }
     }
+    (None, None)
+}
+
+/// Windows GPU detection through DXGI: enumerate adapters, skip
+/// software adapters (for example the Microsoft Basic Render
+/// Driver) when a hardware adapter exists, and report the hardware
+/// adapter with the most dedicated video memory.
+#[cfg(target_os = "windows")]
+fn detect_gpu() -> (Option<u64>, Option<String>) {
+    use windows::Win32::Graphics::Dxgi::{
+        CreateDXGIFactory1, IDXGIFactory1, DXGI_ADAPTER_FLAG_SOFTWARE,
+    };
+    let factory: IDXGIFactory1 = match unsafe { CreateDXGIFactory1() } {
+        Ok(factory) => factory,
+        Err(_) => return (None, None),
+    };
+    let mut best: Option<(u64, String)> = None;
+    let mut fallback_name: Option<String> = None;
+    let mut index = 0u32;
+    loop {
+        let adapter = match unsafe { factory.EnumAdapters1(index) } {
+            Ok(adapter) => adapter,
+            Err(_) => break,
+        };
+        index += 1;
+        if let Ok(desc) = unsafe { adapter.GetDesc1() } {
+            let end = desc
+                .Description
+                .iter()
+                .position(|&c| c == 0)
+                .unwrap_or(desc.Description.len());
+            let name = String::from_utf16_lossy(&desc.Description[..end]);
+            if fallback_name.is_none() {
+                fallback_name = Some(name.clone());
+            }
+            let is_software = desc.Flags & (DXGI_ADAPTER_FLAG_SOFTWARE.0 as u32) != 0;
+            if !is_software {
+                let vram = desc.DedicatedVideoMemory as u64;
+                if best.as_ref().map(|(v, _)| vram > *v).unwrap_or(true) {
+                    best = Some((vram, name));
+                }
+            }
+        }
+    }
+    match best {
+        Some((vram, name)) => (Some(vram), Some(name)),
+        None => (None, fallback_name),
+    }
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "windows")))]
+fn detect_gpu() -> (Option<u64>, Option<String>) {
     (None, None)
 }
 
@@ -230,6 +299,14 @@ mod tests {
     #[test]
     fn meminfo_without_total_is_none() {
         assert_eq!(parse_meminfo_total("MemFree: 1 kB\n"), None);
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn detect_system_succeeds_on_windows() {
+        let specs = detect_system(&std::env::temp_dir()).expect("detect system");
+        assert!(specs.ram_bytes >= 1 << 31, "RAM implausibly small");
+        assert!(specs.free_disk_bytes > 0);
     }
 
     #[test]
