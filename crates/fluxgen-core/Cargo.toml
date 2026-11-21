@@ -1,0 +1,11 @@
+[package]
+name = "fluxgen-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "Domain types, settings validation, portable paths, and error types for FluxGen."
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
