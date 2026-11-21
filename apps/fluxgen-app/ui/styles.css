@@ -562,6 +562,24 @@ code {
   white-space: pre-wrap;
 }
 
+.simple-list li.lora-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+}
+
+.lora-controls {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+}
+
+.lora-controls input[type="number"] {
+  width: 72px;
+}
+
 .simple-list {
   list-style: none;
   margin: 12px 0;

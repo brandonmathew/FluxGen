@@ -1381,6 +1381,121 @@ fn list_loras(
     store.list_loras(variant).map_err(err_string)
 }
 
+/// Import a LoRA file chosen with the file picker: the file
+/// is copied into the variant's LoRA directory and
+/// registered, enabled at full weight. The original file is
+/// not modified.
+#[tauri::command]
+fn import_lora(
+    state: State<'_, AppState>,
+    variant_id: String,
+    source_path: String,
+) -> Result<fluxgen_core::LoraEntry, String> {
+    let variant =
+        Variant::from_id(&variant_id).ok_or_else(|| format!("unknown variant id: {variant_id}"))?;
+    let source = PathBuf::from(&source_path);
+    if !source.is_file() {
+        return Err(format!("file not found: {}", source.display()));
+    }
+    let extension = source
+        .extension()
+        .map(|e| e.to_string_lossy().to_lowercase())
+        .unwrap_or_default();
+    if extension != "safetensors" && extension != "gguf" {
+        return Err("only .safetensors and .gguf LoRA files can be imported".to_string());
+    }
+    let file_name = source
+        .file_name()
+        .ok_or_else(|| "the picked path has no file name".to_string())?
+        .to_owned();
+    let dir = state.paths.variant_loras_dir(variant);
+    std::fs::create_dir_all(&dir)
+        .map_err(|e| format!("could not create {}: {e}", dir.display()))?;
+    let destination = dir.join(&file_name);
+    if destination.exists() {
+        return Err(format!(
+            "a LoRA named {} is already imported for {}",
+            file_name.to_string_lossy(),
+            variant.display_name()
+        ));
+    }
+    std::fs::copy(&source, &destination).map_err(|e| {
+        format!(
+            "could not copy {} into the LoRA folder: {e}",
+            source.display()
+        )
+    })?;
+    let entry = fluxgen_core::LoraEntry {
+        name: source
+            .file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_else(|| file_name.to_string_lossy().into_owned()),
+        path: destination,
+        variant,
+        weight: 1.0,
+        enabled: true,
+    };
+    let store = state
+        .store
+        .lock()
+        .map_err(|_| "store lock poisoned".to_string())?;
+    store.save_lora(&entry).map_err(err_string)?;
+    Ok(entry)
+}
+
+/// Update a LoRA's weight and enabled state.
+#[tauri::command]
+fn update_lora(
+    state: State<'_, AppState>,
+    variant_id: String,
+    name: String,
+    weight: f32,
+    enabled: bool,
+) -> Result<(), String> {
+    let variant =
+        Variant::from_id(&variant_id).ok_or_else(|| format!("unknown variant id: {variant_id}"))?;
+    if !weight.is_finite() || !(0.0..=2.0).contains(&weight) {
+        return Err("weight must be a number between 0 and 2".to_string());
+    }
+    let store = state
+        .store
+        .lock()
+        .map_err(|_| "store lock poisoned".to_string())?;
+    let mut entry = store
+        .list_loras(variant)
+        .map_err(err_string)?
+        .into_iter()
+        .find(|lora| lora.name == name)
+        .ok_or_else(|| format!("no LoRA named {name} for {}", variant.display_name()))?;
+    entry.weight = weight;
+    entry.enabled = enabled;
+    store.save_lora(&entry).map_err(err_string)
+}
+
+/// Remove a LoRA: its file in the variant's LoRA directory
+/// is deleted along with the record.
+#[tauri::command]
+fn delete_lora(state: State<'_, AppState>, variant_id: String, name: String) -> Result<(), String> {
+    let variant =
+        Variant::from_id(&variant_id).ok_or_else(|| format!("unknown variant id: {variant_id}"))?;
+    let store = state
+        .store
+        .lock()
+        .map_err(|_| "store lock poisoned".to_string())?;
+    let entry = store
+        .list_loras(variant)
+        .map_err(err_string)?
+        .into_iter()
+        .find(|lora| lora.name == name)
+        .ok_or_else(|| format!("no LoRA named {name} for {}", variant.display_name()))?;
+    if entry.path.is_file() {
+        std::fs::remove_file(&entry.path)
+            .map_err(|e| format!("could not delete {}: {e}", entry.path.display()))?;
+    }
+    store.delete_lora(variant, &name).map_err(err_string)?;
+    Ok(())
+}
+
 /// The newest crash report in the portable `crashes/` folder, when
 /// one exists. Checked by the front-end at startup to decide
 /// whether to show the crash screen.
@@ -1542,6 +1657,9 @@ pub fn run() {
             list_gallery,
             list_presets,
             list_loras,
+            import_lora,
+            update_lora,
+            delete_lora,
             check_crash_report,
             delete_crash_report
         ])

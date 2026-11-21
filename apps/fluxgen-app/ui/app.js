@@ -736,20 +736,72 @@ async function loadLoras() {
   if (!loras) return;
   empty.hidden = loras.length > 0;
   for (const lora of loras) {
-    list.appendChild(
-      el(
-        "li",
-        null,
-        lora.name +
-          " · weight " +
-          lora.weight.toFixed(2) +
-          (lora.enabled ? " · enabled" : " · disabled")
-      )
-    );
+    const item = el("li", "lora-item");
+    item.appendChild(el("span", "lora-name", lora.name));
+
+    const enabledBox = document.createElement("input");
+    enabledBox.type = "checkbox";
+    enabledBox.checked = lora.enabled;
+    enabledBox.title = "Enabled";
+    const weightInput = document.createElement("input");
+    weightInput.type = "number";
+    weightInput.min = "0";
+    weightInput.max = "2";
+    weightInput.step = "0.05";
+    weightInput.value = String(lora.weight);
+    weightInput.title = "Weight";
+    const applyChange = async () => {
+      const result = await call("update_lora", {
+        variantId,
+        name: lora.name,
+        weight: Number(weightInput.value) || 0,
+        enabled: enabledBox.checked,
+      });
+      if (result !== undefined) loadLoras();
+    };
+    enabledBox.addEventListener("change", applyChange);
+    weightInput.addEventListener("change", applyChange);
+
+    const controls = el("span", "lora-controls");
+    controls.appendChild(enabledBox);
+    controls.appendChild(document.createTextNode(" weight "));
+    controls.appendChild(weightInput);
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.textContent = "Delete";
+    remove.addEventListener("click", async () => {
+      const result = await call("delete_lora", {
+        variantId,
+        name: lora.name,
+      });
+      if (result !== undefined) loadLoras();
+    });
+    controls.appendChild(remove);
+    item.appendChild(controls);
+    list.appendChild(item);
   }
 }
 
 document.getElementById("lora-variant").addEventListener("change", loadLoras);
+
+document.getElementById("lora-import").addEventListener("click", async () => {
+  clearError();
+  const variantId = document.getElementById("lora-variant").value;
+  if (!variantId) {
+    showError("import_lora: Choose a variant first.");
+    return;
+  }
+  const picked = await window.__TAURI__.dialog.open({
+    multiple: false,
+    directory: false,
+    filters: [
+      { name: "LoRA files", extensions: ["safetensors", "gguf"] },
+    ],
+  });
+  if (typeof picked !== "string") return;
+  const entry = await call("import_lora", { variantId, sourcePath: picked });
+  if (entry) loadLoras();
+});
 
 // ---------------------------------------------------------------------------
 // Image-to-image source picker

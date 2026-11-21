@@ -7,6 +7,14 @@ Semantic Versioning.
 
 ## [Unreleased]
 
+### Added
+
+- LoRA import (Issue #14): the LoRAs page imports a
+  .safetensors or .gguf file with the file picker into the
+  selected variant's LoRA folder and registers it for
+  generation. Imported LoRAs can be enabled or disabled,
+  re-weighted, and deleted from the same page.
+
 ## [0.1.7] - 2026-11-21
 
 ### Fixed
