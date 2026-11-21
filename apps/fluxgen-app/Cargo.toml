@@ -1,0 +1,33 @@
+[package]
+name = "fluxgen-app"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.77"
+description = "FluxGen desktop application: Tauri v2 shell, Rust command layer, and a no-build-step HTML/CSS/JS front-end."
+build = "build.rs"
+
+# This crate is its own workspace: it requires platform GUI
+# libraries (WebView2 on Windows, WebKitGTK on Linux) that the
+# FluxGen library crates do not depend on.
+[workspace]
+
+[lib]
+name = "fluxgen_app_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-updater = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+fluxgen-core = { path = "../../crates/fluxgen-core" }
+fluxgen-models = { path = "../../crates/fluxgen-models" }
+fluxgen-engine = { path = "../../crates/fluxgen-engine" }
+fluxgen-store = { path = "../../crates/fluxgen-store" }
+tokio = { version = "1", features = ["sync"] }
+
+[profile.release]
+lto = "thin"

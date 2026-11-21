@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FluxGen</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div id="crash-screen" class="crash-screen" hidden>
+  <div class="crash-card">
+    <h1>FluxGen stopped unexpectedly</h1>
+    <p class="crash-note">A crash report was found from the previous run. The full report is below and is also stored in the <code>crashes</code> folder. Nothing has been sent anywhere.</p>
+    <p class="crash-file" id="crash-file-name"></p>
+    <pre id="crash-contents" class="crash-contents"></pre>
+    <div class="crash-actions">
+      <button id="crash-copy" type="button">Copy report</button>
+      <button id="crash-delete" type="button">Delete report</button>
+      <button id="crash-continue" type="button" class="primary">Continue</button>
+    </div>
+  </div>
+</div>
+
+<div class="shell">
+  <aside class="sidebar">
+    <div class="brand">
+      <span class="brand-mark" aria-hidden="true"></span>
+      <span class="brand-name">FluxGen</span>
+    </div>
+    <nav class="nav" id="nav">
+      <button type="button" data-page="generate" class="nav-item active">Generate</button>
+      <button type="button" data-page="gallery" class="nav-item">Gallery</button>
+      <button type="button" data-page="models" class="nav-item">Models</button>
+      <button type="button" data-page="loras" class="nav-item">LoRAs</button>
+      <button type="button" data-page="presets" class="nav-item">Presets</button>
+      <button type="button" data-page="settings" class="nav-item">Settings</button>
+    </nav>
+    <div class="sidebar-foot">
+      <div class="engine-pill" id="engine-pill">Engine: stopped</div>
+    </div>
+  </aside>
+
+  <main class="main">
+    <div id="error-banner" class="error-banner" hidden>
+      <span class="error-banner-text" id="error-banner-text"></span>
+      <button type="button" id="error-copy">Copy error</button>
+      <button type="button" id="error-dismiss" aria-label="Dismiss">×</button>
+    </div>
+
+    <!-- Generate -->
+    <section class="page active" id="page-generate">
+      <div class="generate-layout">
+        <div class="controls panel">
+          <label class="field">
+            <span>Variant</span>
+            <select id="gen-variant"></select>
+          </label>
+          <label class="field">
+            <span>Prompt</span>
+            <textarea id="gen-prompt" rows="4" placeholder="Describe the image"></textarea>
+          </label>
+          <label class="field">
+            <span>Negative prompt</span>
+            <textarea id="gen-negative" rows="2"></textarea>
+          </label>
+          <div class="field-row">
+            <label class="field">
+              <span>Width</span>
+              <input type="number" id="gen-width" value="1024" step="16" min="256" max="2048">
+            </label>
+            <label class="field">
+              <span>Height</span>
+              <input type="number" id="gen-height" value="1024" step="16" min="256" max="2048">
+            </label>
+          </div>
+          <div class="field-row">
+            <label class="field">
+              <span>Steps</span>
+              <input type="number" id="gen-steps" value="20" min="1" max="150">
+            </label>
+            <label class="field">
+              <span>Guidance</span>
+              <input type="number" id="gen-guidance" value="3.5" step="0.1" min="0" max="30">
+            </label>
+          </div>
+          <div class="field-row">
+            <label class="field">
+              <span>Seed (blank = random)</span>
+              <input type="number" id="gen-seed" placeholder="Random">
+            </label>
+            <label class="field">
+              <span>Sampler</span>
+              <select id="gen-sampler">
+                <option value="euler">Euler</option>
+                <option value="euler_a">Euler ancestral</option>
+                <option value="heun">Heun</option>
+                <option value="dpm++2m">DPM++ 2M</option>
+                <option value="lcm">LCM</option>
+              </select>
+            </label>
+          </div>
+          <label class="field">
+            <span>Source image (image-to-image, optional)</span>
+            <input type="text" id="gen-init-image" placeholder="Path to source image">
+          </label>
+          <div class="button-row">
+            <button type="button" id="gen-enqueue" class="primary">Add to queue</button>
+          </div>
+          <div class="button-row">
+            <button type="button" id="engine-start">Start engine</button>
+            <button type="button" id="engine-stop">Stop engine</button>
+          </div>
+          <p class="hint" id="engine-note">The engine keeps the selected variant loaded. Starting a different variant requires a stop first.</p>
+        </div>
+
+        <div class="preview panel">
+          <div class="preview-stage" id="preview-stage">
+            <p class="preview-empty">No image yet. Finished generations appear here.</p>
+          </div>
+          <div class="preview-meta" id="preview-meta"></div>
+        </div>
+      </div>
+      <div class="queue panel">
+        <h2>Queue</h2>
+        <ul class="queue-list" id="queue-list">
+          <li class="queue-empty">Queue is empty.</li>
+        </ul>
+      </div>
+    </section>
+
+    <!-- Gallery -->
+    <section class="page" id="page-gallery">
+      <h1>Gallery</h1>
+      <p class="page-note">Every output is stored with its full generation settings, embedded in the PNG file and in the local database.</p>
+      <div class="gallery-grid" id="gallery-grid"></div>
+      <p class="empty-note" id="gallery-empty">No images in the gallery yet.</p>
+    </section>
+
+    <!-- Models -->
+    <section class="page" id="page-models">
+      <h1>Models</h1>
+      <p class="page-note">Model files are downloaded and verified by FluxGen. The recommended quantization is picked from the detected system specifications; an override can be selected per variant and is verified by an engine load test before use.</p>
+      <div id="variant-list" class="variant-list"></div>
+    </section>
+
+    <!-- LoRAs -->
+    <section class="page" id="page-loras">
+      <h1>LoRAs</h1>
+      <p class="page-note">LoRAs are imported with a file picker and stored in the portable LoRA folder, tagged by variant.</p>
+      <label class="field inline">
+        <span>Variant</span>
+        <select id="lora-variant"></select>
+      </label>
+      <ul class="simple-list" id="lora-list"></ul>
+      <p class="empty-note" id="lora-empty">No LoRAs imported for this variant.</p>
+    </section>
+
+    <!-- Presets -->
+    <section class="page" id="page-presets">
+      <h1>Presets</h1>
+      <p class="page-note">A preset stores a variant, all generation settings, and the LoRA stack with weights, and re-applies them in one click.</p>
+      <ul class="simple-list" id="preset-list"></ul>
+      <p class="empty-note" id="preset-empty">No presets saved yet.</p>
+    </section>
+
+    <!-- Settings -->
+    <section class="page" id="page-settings">
+      <h1>Settings</h1>
+      <div class="panel settings-panel">
+        <h2>Appearance</h2>
+        <label class="field inline">
+          <span>Theme</span>
+          <select id="theme-select">
+            <option value="dark">Dark</option>
+            <option value="light">Light</option>
+          </select>
+        </label>
+      </div>
+      <div class="panel settings-panel">
+        <h2>System</h2>
+        <dl class="sysinfo" id="sysinfo">
+          <dt>GPU</dt><dd id="sys-gpu">Detecting…</dd>
+          <dt>VRAM</dt><dd id="sys-vram">—</dd>
+          <dt>RAM</dt><dd id="sys-ram">—</dd>
+          <dt>Free disk</dt><dd id="sys-disk">—</dd>
+          <dt>Data folder</dt><dd id="sys-data">—</dd>
+        </dl>
+      </div>
+      <div class="panel settings-panel">
+        <h2>Updates</h2>
+        <p class="page-note">FluxGen checks GitHub Releases for updates. An update is installed only after approval. Update artifacts are signed and verified.</p>
+      </div>
+    </section>
+  </main>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>
