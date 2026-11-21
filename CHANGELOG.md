@@ -7,6 +7,8 @@ Semantic Versioning.
 
 ## [Unreleased]
 
+## [0.1.8] - 2026-11-21
+
 ### Added
 
 - LoRA import (Issue #14): the LoRAs page imports a
