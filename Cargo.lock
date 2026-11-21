@@ -212,7 +212,7 @@ dependencies = [
 
 [[package]]
 name = "fluxgen-core"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -221,7 +221,7 @@ dependencies = [
 
 [[package]]
 name = "fluxgen-engine"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "fluxgen-core",
  "reqwest",
@@ -233,7 +233,7 @@ dependencies = [
 
 [[package]]
 name = "fluxgen-models"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "fluxgen-core",
  "futures-util",
@@ -249,7 +249,7 @@ dependencies = [
 
 [[package]]
 name = "fluxgen-store"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "fluxgen-core",
  "png",

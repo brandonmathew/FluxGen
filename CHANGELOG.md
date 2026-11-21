@@ -7,6 +7,18 @@ Semantic Versioning.
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-11-20
+
+### Fixed
+
+- System specification detection on Windows: total RAM is read with
+  GlobalMemoryStatusEx and GPU name and dedicated VRAM are read with
+  DXGI adapter enumeration. Detection previously returned a
+  not-implemented error on Windows, which also blocked the
+  quantization recommendation.
+
+## [0.1.0] - 2026-11-20
+
 ### Added
 
 - Repository structure: Rust workspace with `fluxgen-core`,
