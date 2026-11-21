@@ -7,6 +7,15 @@ Semantic Versioning.
 
 ## [Unreleased]
 
+### Fixed
+
+- The front-end script died before startup completed
+  (Issue #17): the job-updated listener was registered
+  through an undefined name, which stopped the script and
+  left every page showing its empty placeholders — no
+  system info, no model list, no update check. The listener
+  now registers the same way as every other listener.
+
 ## [0.1.6] - 2026-11-21
 
 ### Added

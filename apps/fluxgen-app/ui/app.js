@@ -672,7 +672,7 @@ document.getElementById("gen-enqueue").addEventListener("click", async () => {
   renderQueue();
 });
 
-listen("job-updated", async (event) => {
+window.__TAURI__.event.listen("job-updated", async (event) => {
   const updated = event.payload;
   const at = state.queue.findIndex((j) => j.id === updated.id);
   if (at >= 0) state.queue[at] = updated;
