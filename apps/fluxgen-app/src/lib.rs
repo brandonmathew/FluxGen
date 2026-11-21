@@ -663,7 +663,7 @@ const PORTABLE_MANIFEST_URL: &str =
 
 /// One release's portable download, from `portable.json`.
 #[derive(Debug, Clone, serde::Deserialize)]
-struct PortableManifest {
+pub struct PortableManifest {
     /// Release version, `X.Y.Z`.
     version: String,
     /// URL of the bare portable executable asset.
