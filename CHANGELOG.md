@@ -7,6 +7,8 @@ Semantic Versioning.
 
 ## [Unreleased]
 
+## [0.1.3] - 2026-11-20
+
 ### Fixed
 
 - Engine start: the variant's diffusion model is passed to
