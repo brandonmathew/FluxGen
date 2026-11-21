@@ -7,6 +7,8 @@ Semantic Versioning.
 
 ## [Unreleased]
 
+## [0.1.4] - 2026-11-20
+
 ### Added
 
 - Signed in-app updates: the application checks GitHub
