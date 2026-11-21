@@ -7,6 +7,18 @@ Semantic Versioning.
 
 ## [Unreleased]
 
+### Added
+
+- Segmented downloads: files of 32 MiB and larger download
+  through up to 8 parallel range connections into one
+  pre-sized partial file, with per-segment resume state
+  (Issue #16).
+
+### Changed
+
+- The portable download is the bare `FluxGen.exe` again
+  instead of a zip archive.
+
 ## [0.1.4] - 2026-11-20
 
 ### Added
