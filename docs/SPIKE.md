@@ -72,23 +72,42 @@ cargo run -p fluxgen-engine --example engine_spike -- <fake-sd-server> 18099
 SPIKE RESULT: server answered HTTP at http://127.0.0.1:18099
 ```
 
-## Real sd-server — NOT PROVEN
+## Real sd-server — PROVEN on Linux (CPU), 2026-11-20
 
-A real stable-diffusion.cpp build was not completed in this
-stage:
+Verified against stable-diffusion.cpp **master-1106-532d2c1**
+(built from the pinned release source on the build machine;
+the binary reports that exact version string). Integration
+tests live in `crates/fluxgen-engine/tests/real_server.rs` and
+run when `FLUXGEN_SD_SERVER_BIN` and `FLUXGEN_KLEIN_DIR` point
+at a real binary and the FLUX.2 Klein 4B test files.
 
-- A shallow clone of the upstream repository was started, then
-  stopped before any build step: the cloned content failed an
-  execution-risk check, and building or running that content was
-  not carried out. The partial clone was deleted.
-- No real `sd-server` binary has been launched by the supervisor.
-- The fallback fake-server integration test above was used
-  instead, as specified for this case.
-- sd-server argument names in `fluxgen-engine` (`--model`,
-  `--vae`, `--clip_l`, `--t5xxl`, `--llm`, `--params-backend`)
-  follow the upstream documentation but have not been exercised
-  against a real binary. Flag verification against a real build
-  remains open.
+Results (both tests pass, 151 s total on a 4-core CPU machine):
+
+- Missing model: the supervisor surfaces
+  `AppError::EngineExited` carrying the real server's captured
+  output.
+- Full path: the supervisor launches the real server with
+  FluxGen's argument set, the server loads the Klein files
+  (5,020 MB of parameters), readiness succeeds, an HTTP
+  generation request (256×256, 1 step) returns an image, and
+  shutdown is clean.
+
+Findings from this verification:
+
+- The diffusion model must be passed with `--diffusion-model`.
+  With `--model` the real server loads the files, then exits
+  with `get sd version from file failed` (Issue #12; fixed).
+- The FLUX.2 VAE in Diffusers format
+  (`vae/diffusion_pytorch_model.safetensors`, BF16) loads and
+  is used by the server without conversion.
+- Several variant profile entries pointed at repositories that
+  do not contain the files, and all recorded sizes were rounded
+  estimates; sources and exact byte sizes were corrected from
+  the repository listings (Issue #11).
+
+NOT PROVEN by this run: CUDA execution, the Chroma and FLUX.1
+variants against the real server, and generation through the
+application on the target Windows machine (Issue #2).
 
 ## Tauri application — NOT PROVEN on Windows
 

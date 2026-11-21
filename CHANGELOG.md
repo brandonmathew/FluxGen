@@ -7,6 +7,28 @@ Semantic Versioning.
 
 ## [Unreleased]
 
+### Fixed
+
+- Engine start: the variant's diffusion model is passed to
+  sd-server with `--diffusion-model`. With `--model` the real
+  server (stable-diffusion.cpp master-1106-532d2c1) loads the
+  files, then exits with `get sd version from file failed`, so
+  no variant could start.
+- Variant profiles: shared-file sources corrected for all three
+  variants (several entries pointed at repositories that do not
+  contain the files; the Klein text encoder's original
+  repository is gated and was replaced with a byte-identical
+  mirror), and every recorded file size is now the exact byte
+  count from the repository listing instead of a rounded
+  estimate the download verifier would reject.
+
+### Added
+
+- Engine integration tests against a real sd-server binary
+  (environment-gated): missing-model error surfacing, model
+  load, an HTTP generation request, and clean shutdown,
+  verified with FLUX.2 Klein 4B on CPU.
+
 ## [0.1.2] - 2026-11-20
 
 ### Fixed
