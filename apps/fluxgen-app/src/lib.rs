@@ -28,7 +28,7 @@ use fluxgen_store::Store;
 const ENGINE_PORT: u16 = 8189;
 
 /// One in-flight variant download.
-struct DownloadSlot {
+pub struct DownloadSlot {
     /// Set by the cancel command; the runner checks it before
     /// reporting completion so a cancel is reported exactly once.
     cancelled: Arc<AtomicBool>,
@@ -37,7 +37,7 @@ struct DownloadSlot {
 }
 
 /// Registry of in-flight downloads, keyed by variant id.
-type DownloadRegistry = tokio::sync::Mutex<HashMap<String, DownloadSlot>>;
+pub type DownloadRegistry = tokio::sync::Mutex<HashMap<String, DownloadSlot>>;
 
 /// Application state shared by commands.
 pub struct AppState {
@@ -298,11 +298,10 @@ async fn run_variant_download(
         let mut last_percent: u64 = u64::MAX;
         download_file(task, move |written, _total| {
             let overall = base_bytes + written;
-            let percent = if overall_total_bytes > 0 {
-                overall * 100 / overall_total_bytes
-            } else {
-                100
-            };
+            let percent = overall
+                .checked_mul(100)
+                .and_then(|scaled| scaled.checked_div(overall_total_bytes))
+                .unwrap_or(100);
             if percent == last_percent {
                 return;
             }
