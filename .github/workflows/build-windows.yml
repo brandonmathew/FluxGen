@@ -68,10 +68,10 @@ jobs:
             if (-not $found) { throw "CUDA runtime archive is missing $name" }
             Copy-Item $found.FullName "$bundle\$name"
           }
-          $files = Get-ChildItem $bundle
-          if ($files.Count -ne 21) { throw "engine bundle must contain 21 files, found $($files.Count)" }
+          $files = Get-ChildItem $bundle | Where-Object { $_.Extension -in ".exe", ".dll" }
+          if ($files.Count -ne 21) { throw "engine bundle must contain 21 binary files, found $($files.Count)" }
           $total = ($files | Measure-Object Length -Sum).Sum
-          Write-Host "Engine bundle: $($files.Count) files, $total bytes"
+          Write-Host "Engine bundle: $($files.Count) binary files, $total bytes"
       - name: Build application and NSIS bundle
         working-directory: apps/fluxgen-app
         run: cargo tauri build

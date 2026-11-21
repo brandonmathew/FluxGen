@@ -341,8 +341,8 @@ async fn start_variant_download(
     variant_id: String,
     quant_label: Option<String>,
 ) -> Result<(), String> {
-    let variant = Variant::from_id(&variant_id)
-        .ok_or_else(|| format!("unknown variant id: {variant_id}"))?;
+    let variant =
+        Variant::from_id(&variant_id).ok_or_else(|| format!("unknown variant id: {variant_id}"))?;
     let profile = profile_for(variant);
     let quant = match &quant_label {
         Some(label) => profile
@@ -378,7 +378,8 @@ async fn start_variant_download(
     let runner_app = app.clone();
     let runner_variant = variant_id.clone();
     let handle = tokio::spawn(async move {
-        let result = run_variant_download(runner_app.clone(), runner_variant.clone(), pending).await;
+        let result =
+            run_variant_download(runner_app.clone(), runner_variant.clone(), pending).await;
         // Unregister, but only our own slot: a cancel removes
         // the slot itself, and a newer download for the same
         // variant must not be disturbed.
